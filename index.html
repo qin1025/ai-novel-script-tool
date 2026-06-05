@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI 小说转剧本工具</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">YAML Screenplay Workspace</p>
+          <h1>AI 小说转剧本工具</h1>
+        </div>
+        <div class="topbar-actions">
+          <a class="ghost-link" href="./docs/YAML_SCHEMA.md" download>Schema 文档</a>
+          <button id="loadSampleButton" type="button" class="secondary-button">示例文本</button>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="小说转剧本工作区">
+        <form class="panel input-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>小说文本</h2>
+              <p>三章以上正文</p>
+            </div>
+            <label class="file-button">
+              <input id="fileInput" type="file" accept=".txt,.md,text/plain,text/markdown">
+              导入
+            </label>
+          </div>
+
+          <label class="field-label" for="titleInput">项目标题</label>
+          <input id="titleInput" class="title-input" type="text" value="雾城来信">
+
+          <label class="field-label" for="novelInput">正文</label>
+          <textarea id="novelInput" class="novel-input" spellcheck="false"></textarea>
+
+          <div class="control-row">
+            <button id="convertButton" type="submit" class="primary-button">生成 YAML</button>
+            <button id="clearButton" type="button" class="secondary-button">清空</button>
+          </div>
+        </form>
+
+        <section class="panel output-panel" aria-label="YAML 输出">
+          <div class="panel-heading">
+            <div>
+              <h2>结构化剧本</h2>
+              <p id="statusText">等待生成</p>
+            </div>
+            <div class="output-actions">
+              <button id="copyButton" type="button" class="secondary-button">复制</button>
+              <button id="downloadButton" type="button" class="secondary-button">下载</button>
+            </div>
+          </div>
+
+          <textarea id="yamlOutput" class="yaml-output" spellcheck="false" readonly></textarea>
+        </section>
+      </section>
+
+      <section class="inspector" aria-label="剧本检查器">
+        <article class="stat-panel">
+          <span>章节</span>
+          <strong id="chapterCount">0</strong>
+        </article>
+        <article class="stat-panel">
+          <span>场景</span>
+          <strong id="sceneCount">0</strong>
+        </article>
+        <article class="stat-panel">
+          <span>角色</span>
+          <strong id="characterCount">0</strong>
+        </article>
+        <article class="stat-panel">
+          <span>Beat</span>
+          <strong id="beatCount">0</strong>
+        </article>
+        <article class="warnings-panel">
+          <h2>校验</h2>
+          <ul id="warningList"></ul>
+        </article>
+        <article class="map-panel">
+          <h2>结构图</h2>
+          <canvas id="structureCanvas" width="680" height="150" aria-label="章节和场景结构图"></canvas>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
