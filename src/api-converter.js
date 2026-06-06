@@ -155,16 +155,17 @@ export async function requestChapterScript({
 
 export async function convertNovelWithApi(text, options = {}) {
   const chapters = splitChapters(text);
+  const apiChapters = limitChapters(chapters, options.maxChapters);
   const normalizedEntries = [];
   let sceneCounter = 0;
   let beatCounter = 0;
 
-  for (let index = 0; index < chapters.length; index += 1) {
-    const chapter = chapters[index];
+  for (let index = 0; index < apiChapters.length; index += 1) {
+    const chapter = apiChapters[index];
 
     options.onProgress?.({
       current: index + 1,
-      total: chapters.length,
+      total: apiChapters.length,
       title: chapter.title
     });
 
@@ -217,6 +218,22 @@ export async function convertNovelWithApi(text, options = {}) {
     warnings,
     yaml: serializeYaml(project)
   };
+}
+
+function limitChapters(chapters, maxChapters) {
+  const limit = normalizePositiveInteger(maxChapters);
+
+  return limit > 0 ? chapters.slice(0, limit) : chapters;
+}
+
+function normalizePositiveInteger(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number <= 0) {
+    return 0;
+  }
+
+  return Math.floor(number);
 }
 
 function buildProxyRequestOptions(targetUrl, requestOptions) {

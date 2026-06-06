@@ -26,6 +26,7 @@ def load_api_config(path=API_CONFIG_FILE):
             "apiKey": "",
             "model": "",
             "authHeader": "bearer",
+            "maxChapters": 0,
             "requestBody": {},
         }
 
@@ -41,8 +42,18 @@ def load_api_config(path=API_CONFIG_FILE):
         "apiKey": str(raw.get("apiKey") or "").strip(),
         "model": str(raw.get("model") or "").strip(),
         "authHeader": str(raw.get("authHeader") or "bearer").strip() or "bearer",
+        "maxChapters": normalize_max_chapters(raw.get("maxChapters")),
         "requestBody": request_body,
     }
+
+
+def normalize_max_chapters(value):
+    try:
+        max_chapters = int(value)
+    except (TypeError, ValueError):
+        return 0
+
+    return max_chapters if max_chapters > 0 else 0
 
 
 def public_api_config_status(config):
@@ -58,6 +69,7 @@ def public_api_config_status(config):
         "baseUrl": config.get("baseUrl") or "",
         "model": config.get("model") or "",
         "authHeader": config.get("authHeader") or "bearer",
+        "maxChapters": normalize_max_chapters(config.get("maxChapters")),
         "hasApiKey": bool(config.get("apiKey")),
     }
 

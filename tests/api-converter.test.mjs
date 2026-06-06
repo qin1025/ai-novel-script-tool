@@ -345,3 +345,74 @@ await runTest("processes every detected chapter in API mode", async () => {
   );
   assert.doesNotMatch(result.yaml, /\baliases:/);
 });
+
+await runTest("limits API mode to configured maxChapters", async () => {
+  let callCount = 0;
+  const fakeFetch = async () => {
+    callCount += 1;
+    return {
+      ok: true,
+      async json() {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: `第${callCount}章`,
+                  summary: "测试。",
+                  characters: [{ name: "白冷叶", role: "主角" }],
+                  scenes: [
+                    {
+                      title: "第一场",
+                      location: "家门口",
+                      time: "夜晚",
+                      pov: "白冷叶",
+                      emotional_tone: "愤怒",
+                      characters: ["白冷叶"],
+                      beats: [
+                        {
+                          type: "dialogue",
+                          speaker: "白冷叶",
+                          text: "我还在。"
+                        }
+                      ],
+                      props: [],
+                      revision_notes: []
+                    }
+                  ]
+                })
+              }
+            }
+          ]
+        };
+      }
+    };
+  };
+
+  const result = await convertNovelWithApi(
+    `第一章 起声
+白冷叶：“你给我站住！”
+
+第二章 余波
+白冷叶：“我会回来。”
+
+第三章 收束
+白冷叶：“结束了。”
+
+第四章 新局
+白冷叶：“继续。”`,
+    {
+      apiKey: "test-key",
+      baseUrl: "https://api.example.com/v1",
+      model: "test-model",
+      maxChapters: 2,
+      fetchImpl: fakeFetch
+    }
+  );
+
+  assert.equal(callCount, 2);
+  assert.equal(result.project.source.chapter_count, 4);
+  assert.equal(result.project.chapters.length, 2);
+  assert.equal(result.project.metadata.source_chapter_count, 4);
+  assert.equal(result.project.metadata.api_processed_chapter_count, 2);
+});

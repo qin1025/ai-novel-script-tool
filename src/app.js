@@ -54,6 +54,7 @@ let apiConfigStatus = {
   enabled: false,
   configured: false,
   loading: true,
+  maxChapters: 0,
   message: "正在读取 api-config.json..."
 };
 
@@ -195,6 +196,7 @@ async function convertCurrentText() {
       ? await convertNovelWithApi(text, {
           title: elements.titleInput.value,
           model: apiConfigStatus.model,
+          maxChapters: apiConfigStatus.maxChapters,
           useConfiguredProxy: true,
           onProgress: ({ current, total, title }) => {
             setStatus(
@@ -311,6 +313,7 @@ async function loadApiConfigStatus() {
       baseUrl: payload.baseUrl || "",
       model: payload.model || "",
       authHeader: payload.authHeader || "bearer",
+      maxChapters: normalizeMaxChapters(payload.maxChapters),
       hasApiKey: Boolean(payload.hasApiKey),
       loading: false,
       message: payload.message || ""
@@ -320,6 +323,7 @@ async function loadApiConfigStatus() {
       enabled: false,
       configured: false,
       loading: false,
+      maxChapters: 0,
       message: "未连接本地服务，使用本地转换。"
     };
   }
@@ -338,10 +342,14 @@ function renderApiConfigStatus() {
   }
 
   if (apiConfigStatus.enabled && apiConfigStatus.configured) {
+    const limitText =
+      apiConfigStatus.maxChapters > 0
+        ? ` · 最多 ${apiConfigStatus.maxChapters} 章`
+        : "";
     elements.apiStatusLabel.textContent = "API 增强已启用";
     elements.apiStatusLabel.className = "is-ok";
     elements.apiStatusDetail.textContent =
-      `${apiConfigStatus.model || "未命名模型"} · ${apiConfigStatus.authHeader || "bearer"} · 密钥已加载`;
+      `${apiConfigStatus.model || "未命名模型"} · ${apiConfigStatus.authHeader || "bearer"} · 密钥已加载${limitText}`;
     return;
   }
 
@@ -356,6 +364,16 @@ function renderApiConfigStatus() {
   elements.apiStatusLabel.textContent = "本地转换模式";
   elements.apiStatusDetail.textContent =
     apiConfigStatus.message || "如需 API 增强，请编辑 api-config.json。";
+}
+
+function normalizeMaxChapters(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number <= 0) {
+    return 0;
+  }
+
+  return Math.floor(number);
 }
 
 function setBusy(isBusy) {

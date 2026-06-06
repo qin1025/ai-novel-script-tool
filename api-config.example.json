@@ -4,6 +4,7 @@
   "apiKey": "",
   "model": "mimo-v2.5-pro",
   "authHeader": "api-key",
+  "maxChapters": 3,
   "requestBody": {
     "stream": false,
     "max_completion_tokens": 8192,

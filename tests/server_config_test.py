@@ -18,6 +18,7 @@ class ApiConfigTests(unittest.TestCase):
                         "apiKey": "test-key",
                         "model": "test-model",
                         "authHeader": "api-key",
+                        "maxChapters": 3,
                         "requestBody": {
                             "stream": False,
                             "response_format": {"type": "json_object"},
@@ -33,6 +34,7 @@ class ApiConfigTests(unittest.TestCase):
         self.assertEqual(config["baseUrl"], "https://api.example.com/v1")
         self.assertEqual(config["apiKey"], "test-key")
         self.assertEqual(config["authHeader"], "api-key")
+        self.assertEqual(config["maxChapters"], 3)
         self.assertEqual(config["requestBody"]["stream"], False)
 
     def test_public_status_never_exposes_api_key(self):
@@ -43,12 +45,14 @@ class ApiConfigTests(unittest.TestCase):
                 "apiKey": "secret-key",
                 "model": "test-model",
                 "authHeader": "bearer",
+                "maxChapters": 2,
                 "requestBody": {},
             }
         )
 
         self.assertTrue(status["configured"])
         self.assertTrue(status["hasApiKey"])
+        self.assertEqual(status["maxChapters"], 2)
         self.assertNotIn("apiKey", status)
         self.assertNotIn("secret-key", json.dumps(status))
 
@@ -60,6 +64,7 @@ class ApiConfigTests(unittest.TestCase):
                 "apiKey": "secret-key",
                 "model": "test-model",
                 "authHeader": "api-key",
+                "maxChapters": 2,
                 "requestBody": {
                     "stream": False,
                     "max_completion_tokens": 8192,
@@ -77,6 +82,7 @@ class ApiConfigTests(unittest.TestCase):
         self.assertEqual(body["messages"][0]["content"], "hello")
         self.assertEqual(body["stream"], False)
         self.assertEqual(body["response_format"], {"type": "json_object"})
+        self.assertNotIn("maxChapters", body)
 
 
 if __name__ == "__main__":

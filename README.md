@@ -38,6 +38,7 @@ API 参数不在使用界面填写。先编辑项目根目录的 `api-config.jso
   "apiKey": "你的密钥",
   "model": "mimo-v2.5-pro",
   "authHeader": "api-key",
+  "maxChapters": 3,
   "requestBody": {
     "stream": false,
     "max_completion_tokens": 8192,
@@ -47,9 +48,11 @@ API 参数不在使用界面填写。先编辑项目根目录的 `api-config.jso
 }
 ```
 
-点击“生成 YAML”后，工具会按检测到的全部章节调用 `/chat/completions`，要求模型返回 JSON，再由本地转换成 YAML。页面只显示 API 是否启用、模型名和鉴权方式，不显示 API Key。
+点击“生成 YAML”后，工具会按检测到的章节调用 `/chat/completions`，要求模型返回 JSON，再由本地转换成 YAML。未设置 `maxChapters` 时默认转换全部章节；设置后只转换前 N 章。页面只显示 API 是否启用、模型名、鉴权方式和章节上限，不显示 API Key。
 
 `start-tool.bat` 会启动 `server.py`。API Key 只由本机服务读取，浏览器端不会保存或发送密钥配置；请求会先发到本机 `/api/chat/completions`，再由本机转发到外部模型接口。这样可以避免很多第三方接口的浏览器跨域限制。
+
+如需控制 API 消耗，可以设置 `maxChapters`。例如 `3` 表示 API 模式只转换前 3 个检测到的章节；缺省、`0` 或非法值表示不限制。这个选项只影响 API 增强模式，本地转换模式不受影响。
 
 ### MiMo 2.5
 
