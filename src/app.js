@@ -1,4 +1,11 @@
-import { convertNovelToYaml } from "./converter.js";
+import { convertNovelWithApi } from "./api-converter.js?v=2026-06-06-mimo";
+import { convertNovelToYaml } from "./converter.js?v=2026-06-06-mimo";
+import { decodeTextBytes } from "./text-decoding.js?v=2026-06-06-mimo";
+import {
+  buildImportedTextPreview,
+  buildYamlPreview,
+  formatNumber
+} from "./output-preview.js?v=2026-06-06-mimo";
 
 const sampleNovel = `《雾城来信》
 
@@ -24,6 +31,15 @@ const elements = {
   yamlOutput: document.querySelector("#yamlOutput"),
   statusText: document.querySelector("#statusText"),
   fileInput: document.querySelector("#fileInput"),
+  convertButton: document.querySelector("#convertButton"),
+  apiEnabled: document.querySelector("#apiEnabled"),
+  apiProvider: document.querySelector("#apiProvider"),
+  apiBaseUrl: document.querySelector("#apiBaseUrl"),
+  apiKey: document.querySelector("#apiKey"),
+  apiModel: document.querySelector("#apiModel"),
+  apiAuthMode: document.querySelector("#apiAuthMode"),
+  apiChapterLimit: document.querySelector("#apiChapterLimit"),
+  mimoPresetButton: document.querySelector("#mimoPresetButton"),
   loadSampleButton: document.querySelector("#loadSampleButton"),
   clearButton: document.querySelector("#clearButton"),
   copyButton: document.querySelector("#copyButton"),
@@ -37,25 +53,66 @@ const elements = {
 };
 
 let latestResult = null;
+let latestImportEncoding = "";
+let latestImportedText = "";
+let latestYamlPreview = null;
 
-elements.novelInput.value = sampleNovel;
-convertCurrentText();
+loadApiSettings();
+renderEmptyState();
 
-elements.form.addEventListener("submit", (event) => {
+elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  convertCurrentText();
+  await convertCurrentText();
 });
 
-elements.loadSampleButton.addEventListener("click", () => {
+elements.loadSampleButton.addEventListener("click", async () => {
+  latestImportEncoding = "";
+  latestImportedText = "";
   elements.titleInput.value = "雾城来信";
   elements.novelInput.value = sampleNovel;
-  convertCurrentText();
+  elements.yamlOutput.value = "";
+  latestResult = null;
+  latestYamlPreview = null;
+  renderEmptyStats();
+  renderWarnings(["示例文本已载入，请点击“生成 YAML”。"]);
+  drawStructure(null);
+  setStatus("示例文本已载入，等待生成", true);
+});
+
+elements.novelInput.addEventListener("input", () => {
+  latestImportedText = "";
+  latestImportEncoding = "";
+});
+
+for (const element of [
+  elements.apiEnabled,
+  elements.apiProvider,
+  elements.apiBaseUrl,
+  elements.apiModel,
+  elements.apiAuthMode,
+  elements.apiChapterLimit
+]) {
+  element.addEventListener("change", saveApiSettings);
+}
+
+elements.mimoPresetButton.addEventListener("click", () => {
+  elements.apiEnabled.checked = true;
+  elements.apiProvider.value = "mimo";
+  elements.apiBaseUrl.value = "https://api.xiaomimimo.com/v1";
+  elements.apiModel.value = "mimo-v2.5-pro";
+  elements.apiAuthMode.value = "api-key";
+  elements.apiChapterLimit.value = elements.apiChapterLimit.value || "3";
+  saveApiSettings();
+  setStatus("已应用 MiMo 2.5 预设，请填写 API Key 后生成", true);
 });
 
 elements.clearButton.addEventListener("click", () => {
+  elements.titleInput.value = "";
   elements.novelInput.value = "";
   elements.yamlOutput.value = "";
   latestResult = null;
+  latestImportedText = "";
+  latestYamlPreview = null;
   renderEmptyState();
 });
 
@@ -66,15 +123,49 @@ elements.fileInput.addEventListener("change", async (event) => {
     return;
   }
 
-  elements.novelInput.value = await file.text();
-  if (!elements.titleInput.value.trim()) {
-    elements.titleInput.value = file.name.replace(/\.[^.]+$/, "");
+  try {
+    setBusy(true);
+    setStatus("正在读取并识别编码...", false);
+    await nextFrame();
+
+    const decoded = decodeTextBytes(await file.arrayBuffer());
+    latestImportEncoding = decoded.encoding;
+    latestImportedText = decoded.text;
+    const inputPreview = buildImportedTextPreview(
+      decoded.text,
+      file.name,
+      decoded.encoding
+    );
+
+    elements.novelInput.value = inputPreview.text;
+    if (!elements.titleInput.value.trim()) {
+      elements.titleInput.value = file.name.replace(/\.[^.]+$/, "");
+    }
+
+    elements.yamlOutput.value = "";
+    latestResult = null;
+    latestYamlPreview = null;
+    renderEmptyStats();
+    renderWarnings(["文本已导入，请点击“生成 YAML”。"]);
+    drawStructure(null);
+    setStatus(
+      `已导入 ${file.name} · ${decoded.encoding}，等待生成 YAML`,
+      true
+    );
+  } catch (error) {
+    setStatus(`导入失败：${error.message || "无法读取文件"}`, false);
+  } finally {
+    setBusy(false);
   }
-  convertCurrentText();
 });
 
 elements.copyButton.addEventListener("click", async () => {
   if (!elements.yamlOutput.value) {
+    return;
+  }
+
+  if (latestYamlPreview?.truncated) {
+    setStatus("YAML 很大，请用下载按钮保存完整文件", false);
     return;
   }
 
@@ -98,49 +189,97 @@ elements.downloadButton.addEventListener("click", () => {
   downloadText(`${safeFileName(title)}.yaml`, latestResult.yaml);
 });
 
-function convertCurrentText() {
-  const text = elements.novelInput.value.trim();
+async function convertCurrentText() {
+  const text = getCurrentSourceText().trim();
 
   if (!text) {
     renderEmptyState();
     return;
   }
 
-  latestResult = convertNovelToYaml(text, {
-    title: elements.titleInput.value
-  });
+  try {
+    setBusy(true);
+    setStatus(formatStatus(getApiSettings().enabled ? "正在调用 API..." : "正在生成 YAML..."), true);
+    await nextFrame();
 
-  elements.yamlOutput.value = latestResult.yaml;
-  renderStats(latestResult);
-  renderWarnings(latestResult.warnings);
-  drawStructure(latestResult.project);
-  setStatus(
-    latestResult.warnings.length > 0 ? "已生成，需校验" : "已生成，可提交",
-    latestResult.warnings.length === 0
-  );
+    const apiSettings = getApiSettings();
+    latestResult = apiSettings.enabled
+      ? await convertNovelWithApi(text, {
+          title: elements.titleInput.value,
+          apiKey: apiSettings.apiKey,
+          baseUrl: apiSettings.baseUrl,
+          model: apiSettings.model,
+          provider: apiSettings.provider,
+          authMode: apiSettings.authMode,
+          useProxy: true,
+          maxChapters: apiSettings.maxChapters,
+          onProgress: ({ current, total, title }) => {
+            setStatus(
+              formatStatus(`API 生成中 ${current}/${total}：${title}`),
+              true
+            );
+          }
+        })
+      : convertNovelToYaml(text, {
+          title: elements.titleInput.value
+        });
+    latestYamlPreview = buildYamlPreview(latestResult.yaml);
+
+    elements.yamlOutput.value = latestYamlPreview.text;
+    renderStats(latestResult);
+    renderWarnings(latestResult.warnings);
+    drawStructure(latestResult.project);
+    const suffix = latestYamlPreview.truncated
+      ? `，预览 ${formatNumber(latestYamlPreview.text.length)} / 完整 ${formatNumber(latestYamlPreview.originalLength)} 字符`
+      : "";
+    setStatus(
+      formatStatus(
+        `${latestResult.warnings.length > 0 ? "已生成，需校验" : "已生成，可提交"}${suffix}`
+      ),
+      latestResult.warnings.length === 0
+    );
+  } catch (error) {
+    setStatus(`生成失败：${error.message || "无法转换文本"}`, false);
+  } finally {
+    setBusy(false);
+  }
 }
 
 function renderEmptyState() {
   latestResult = null;
-  elements.statusText.textContent = "等待生成";
+  latestImportEncoding = "";
+  latestImportedText = "";
+  latestYamlPreview = null;
+  elements.statusText.textContent = "等待导入或输入";
   elements.statusText.className = "";
-  elements.chapterCount.textContent = "0";
-  elements.sceneCount.textContent = "0";
-  elements.characterCount.textContent = "0";
-  elements.beatCount.textContent = "0";
+  renderEmptyStats();
   renderWarnings(["请输入三章以上小说文本。"]);
   drawStructure(null);
 }
 
+function renderEmptyStats() {
+  elements.chapterCount.textContent = "0";
+  elements.sceneCount.textContent = "0";
+  elements.characterCount.textContent = "0";
+  elements.beatCount.textContent = "0";
+}
+
 function renderStats(result) {
   const chapters = result.project.chapters;
-  const scenes = chapters.flatMap((chapter) => chapter.scenes);
-  const beats = scenes.flatMap((scene) => scene.beats);
+  let sceneCount = 0;
+  let beatCount = 0;
+
+  for (const chapter of chapters) {
+    sceneCount += chapter.scenes.length;
+    for (const scene of chapter.scenes) {
+      beatCount += scene.beats.length;
+    }
+  }
 
   elements.chapterCount.textContent = String(chapters.length);
-  elements.sceneCount.textContent = String(scenes.length);
+  elements.sceneCount.textContent = String(sceneCount);
   elements.characterCount.textContent = String(result.project.characters.length);
-  elements.beatCount.textContent = String(beats.length);
+  elements.beatCount.textContent = String(beatCount);
 }
 
 function renderWarnings(warnings) {
@@ -166,6 +305,70 @@ function setStatus(message, isOk) {
   elements.statusText.className = isOk ? "is-ok" : "is-error";
 }
 
+function formatStatus(message) {
+  return latestImportEncoding ? `${message} · ${latestImportEncoding}` : message;
+}
+
+function getCurrentSourceText() {
+  return latestImportedText || elements.novelInput.value;
+}
+
+function getApiSettings() {
+  return {
+    enabled: elements.apiEnabled.checked,
+    provider: elements.apiProvider.value,
+    baseUrl: elements.apiBaseUrl.value.trim(),
+    apiKey: elements.apiKey.value.trim(),
+    model: elements.apiModel.value.trim(),
+    authMode: elements.apiAuthMode.value,
+    maxChapters: Number.parseInt(elements.apiChapterLimit.value, 10) || 3
+  };
+}
+
+function loadApiSettings() {
+  const saved = JSON.parse(localStorage.getItem("scriptToolApiSettings") || "{}");
+
+  elements.apiEnabled.checked = Boolean(saved.enabled);
+  elements.apiProvider.value = saved.provider || "generic";
+  elements.apiBaseUrl.value = saved.baseUrl || "";
+  elements.apiModel.value = saved.model || "";
+  elements.apiAuthMode.value = saved.authMode || "bearer";
+  elements.apiChapterLimit.value = saved.maxChapters || "3";
+}
+
+function saveApiSettings() {
+  localStorage.setItem(
+    "scriptToolApiSettings",
+    JSON.stringify({
+      enabled: elements.apiEnabled.checked,
+      provider: elements.apiProvider.value,
+      baseUrl: elements.apiBaseUrl.value.trim(),
+      model: elements.apiModel.value.trim(),
+      authMode: elements.apiAuthMode.value,
+      maxChapters: elements.apiChapterLimit.value || "3"
+    })
+  );
+}
+
+function setBusy(isBusy) {
+  elements.convertButton.disabled = isBusy;
+  elements.fileInput.disabled = isBusy;
+  elements.clearButton.disabled = isBusy;
+  elements.loadSampleButton.disabled = isBusy;
+  elements.apiEnabled.disabled = isBusy;
+  elements.apiProvider.disabled = isBusy;
+  elements.apiBaseUrl.disabled = isBusy;
+  elements.apiKey.disabled = isBusy;
+  elements.apiModel.disabled = isBusy;
+  elements.apiAuthMode.disabled = isBusy;
+  elements.apiChapterLimit.disabled = isBusy;
+  elements.mimoPresetButton.disabled = isBusy;
+}
+
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 function drawStructure(project) {
   const canvas = elements.structureCanvas;
   const context = canvas.getContext("2d");
@@ -184,6 +387,13 @@ function drawStructure(project) {
   }
 
   const padding = 24;
+  const chapters = project.chapters;
+
+  if (chapters.length > 40) {
+    drawCompactStructure(context, chapters, width, height, padding);
+    return;
+  }
+
   const gap = 16;
   const usableWidth = width - padding * 2 - gap * (project.chapters.length - 1);
   const chapterWidth = usableWidth / project.chapters.length;
@@ -209,6 +419,32 @@ function drawStructure(project) {
       context.font = "11px Segoe UI, sans-serif";
       context.fillText(String(beatCount), x + 7, y + 13);
     });
+  });
+}
+
+function drawCompactStructure(context, chapters, width, height, padding) {
+  const maxScenes = Math.max(
+    1,
+    ...chapters.map((chapter) => chapter.scenes.length)
+  );
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - 50;
+  const barWidth = Math.max(1, chartWidth / chapters.length);
+
+  context.fillStyle = "#1d2521";
+  context.font = "12px Segoe UI, sans-serif";
+  context.fillText(`${chapters.length} 章结构概览`, padding, 22);
+
+  chapters.forEach((chapter, index) => {
+    const x = padding + index * barWidth;
+    const barHeight = Math.max(
+      2,
+      Math.round((chapter.scenes.length / maxScenes) * chartHeight)
+    );
+    const y = height - padding - barHeight;
+
+    context.fillStyle = index % 2 === 0 ? "#246b5b" : "#375d91";
+    context.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
   });
 }
 

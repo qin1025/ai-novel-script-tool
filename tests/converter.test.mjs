@@ -63,6 +63,72 @@ runTest("builds an editable screenplay project from three chapters", () => {
   assert.ok(dialogueBeats.some((beat) => beat.text === "那不是信，是一份剧本。"));
 });
 
+runTest("does not treat action phrases before speech verbs as character names", () => {
+  const novel = `第一章 起声
+破旧的大门突然被踹开，一名青年男子走了出来，脸上带着愤怒之色，猛然对着身后吼道：“别碰我的东西！”
+白冷叶猛然对着身后吼道：“别碰我的东西！”
+“喂！你是谁，那是我的东西……”白冷叶摇摇晃晃的走过去，拍了拍那老头肩膀说道。
+老陈说：“我只是路过。”
+妇女哽咽：“我不知道。”
+语气冰冷：“别过来。”
+男的道：“跟我走。”
+高强满意：“这还差不多。”
+方晓语哭：“我不想走。”
+无香淡声：“坐下。”
+男的冷笑：“你跑不掉。”
+身后传来：“站住。”
+白冷叶冷：“别说了。”
+无香轻轻：“我知道。”
+方晓语嬉：“你猜。”
+医生拒绝：“不能进去。”
+白冷叶又：“回来。”
+半响之后：“没人回答。”
+
+第二章 回声
+白冷叶：“你到底是谁？”
+白冷叶问道：“你认识我？”
+那韩夫人继续问道：“你叫什么？”
+
+第三章 收束
+老陈：“以后你会知道。”`;
+
+  const project = buildScriptProject(novel, { title: "角色名测试" });
+  const names = project.characters.map((character) => character.name);
+  const dialogueBeats = project.chapters.flatMap((chapter) =>
+    chapter.scenes.flatMap((scene) =>
+      scene.beats.filter((beat) => beat.type === "dialogue")
+    )
+  );
+
+  assert.ok(names.includes("白冷叶"));
+  assert.ok(names.includes("老陈"));
+  assert.ok(names.includes("韩夫人"));
+  assert.ok(names.includes("高强"));
+  assert.ok(names.includes("方晓语"));
+  assert.ok(names.includes("无香"));
+  assert.equal(names.includes("猛然对着身后吼"), false);
+  assert.equal(names.includes("妇女哽咽"), false);
+  assert.equal(names.includes("语气冰冷"), false);
+  assert.equal(names.includes("男的道"), false);
+  assert.equal(names.includes("白冷叶问道"), false);
+  assert.equal(names.includes("那韩夫人继续问道"), false);
+  assert.equal(names.includes("高强满意"), false);
+  assert.equal(names.includes("方晓语哭"), false);
+  assert.equal(names.includes("无香淡声"), false);
+  assert.equal(names.includes("男的冷笑"), false);
+  assert.equal(names.includes("身后传来"), false);
+  assert.equal(names.includes("白冷叶冷"), false);
+  assert.equal(names.includes("无香轻轻"), false);
+  assert.equal(names.includes("方晓语嬉"), false);
+  assert.equal(names.includes("医生拒绝"), false);
+  assert.equal(names.includes("白冷叶又"), false);
+  assert.equal(names.includes("半响之后"), false);
+  assert.equal(
+    dialogueBeats.some((beat) => beat.speaker === "猛然对着身后吼"),
+    false
+  );
+});
+
 runTest("emits a validation warning below the three-chapter requirement", () => {
   const shortNovel = `第一章 开端
 角色甲：“开始吧。”

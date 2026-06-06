@@ -2,17 +2,17 @@
 setlocal
 
 set "PORT=5173"
-set "APP_URL=http://127.0.0.1:%PORT%/index.html"
+set "APP_URL=http://127.0.0.1:%PORT%/index.html?v=2026-06-06-mimo"
 
 where py >nul 2>nul
 if %errorlevel%==0 (
-  start "AI Novel Script Tool Server" /D "%~dp0" cmd /k py -3 -m http.server %PORT% --bind 127.0.0.1
+  start "AI Novel Script Tool Server" /D "%~dp0" cmd /k py -3 server.py
   goto open_app
 )
 
 where python >nul 2>nul
 if %errorlevel%==0 (
-  start "AI Novel Script Tool Server" /D "%~dp0" cmd /k python -m http.server %PORT% --bind 127.0.0.1
+  start "AI Novel Script Tool Server" /D "%~dp0" cmd /k python server.py
   goto open_app
 )
 

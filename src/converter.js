@@ -7,8 +7,42 @@ const SCENE_HEADING_RE =
   /^\s*(?:场景|镜头|Scene)\s*[一二三四五六七八九十百千万零〇两\d]*\s*[：:.\-、]?\s*(.*)$/i;
 const SPEAKER_LINE_RE = /^([^：:，,。、“”"'\s]{1,16})[：:]\s*(.+)$/;
 const QUOTE_RE = /“([^”]+)”|"([^"]+)"/g;
-const SPEAKER_CONTEXT_RE =
-  /([\u4e00-\u9fa5A-Za-z0-9_·]{1,16})(?:低声|轻声|大声|平静地|忽然|缓缓|急切地|冷冷地)?(?:说|问|喊|道|回答|说道|笑道|低语|喃喃)/g;
+const SPEECH_VERB_RE = /说道|笑道|吼道|喊道|问道|回答|低语|喃喃|说|问|喊|吼|道/;
+const SPEECH_VERB_SUFFIX_RE =
+  /(?:低声|轻声|弱声|细声|淡声|大声|平静地|忽然|缓缓|急切地|冷冷地|继续|微微|冷声|沉声|厉声|哽咽着|哽咽|语气冰冷地?)?(?:说道|笑道|吼道|喊道|问道|回答|低语|喃喃|说|问|喊|吼|道)$/;
+const SPEAKER_ACTION_MARKER_RE =
+  /低声|轻声|弱声|细声|淡声|大声|平静地|忽然|缓缓|急切地|冷冷地|继续|微微|猛然|对着|朝着|冲着|看着|望着|笑着|冷笑|哭着|摇摇晃晃|狠狠|皱眉|愤怒|生气|哽咽|语气|冰冷|满意|激动|不屑|恶毒|关心|傲然|得意|训斥|不满|认真|哭|怒|嗤|拍|走|站|坐|抬|转|点|摇|拿|抓|喝|骂|叹|咳|哼|开口|传来|突然|连忙|赶紧|慢慢|直接|刚|话/;
+const COMMON_DESCRIPTOR_NAMES = new Set([
+  "男子",
+  "青年",
+  "青年男子",
+  "女人",
+  "男人",
+  "少年",
+  "少女",
+  "妇女",
+  "老头",
+  "老人",
+  "男的",
+  "女的",
+  "父亲",
+  "母亲",
+  "后爸",
+  "医生",
+  "半响",
+  "那人",
+  "对方",
+  "小子",
+  "轻轻",
+  "之后",
+  "之后一",
+  "挠挠头",
+  "不过"
+]);
+const DESCRIPTOR_NAME_RE =
+  /^(?:轻轻|之后|之后一|挠挠头|不过|一?妇女|男的|女的|眼镜男|嘴中|身后|语气|一个|一名|男子|青年|女人|男人|少年|少女|老头|老人)|(?:的|了)$/;
+const SPEAKER_SUFFIX_ACTION_RE =
+  /^(.*)(冷喝一声|冷哼一声|坐了回去|轻轻|急忙|拒绝|之后|嬉|又|冷)$/;
 
 export function normalizeText(text) {
   return String(text ?? "")
@@ -294,10 +328,12 @@ function paragraphToBeats(paragraph) {
   const speakerLine = paragraph.match(SPEAKER_LINE_RE);
 
   if (speakerLine) {
+    const speaker = extractSpeakerFromPreVerbText(speakerLine[1]);
+
     return [
       {
         type: "dialogue",
-        speaker: normalizeSpeaker(speakerLine[1]),
+        speaker,
         text: cleanDialogueText(speakerLine[2])
       }
     ];
@@ -318,9 +354,11 @@ function paragraphToBeats(paragraph) {
       });
     }
 
+    const afterContext = paragraph.slice(match.index + match[0].length);
+
     beats.push({
       type: "dialogue",
-      speaker: inferSpeakerFromContext(paragraph.slice(0, match.index)),
+      speaker: inferSpeakerFromContext(paragraph.slice(0, match.index), afterContext),
       text: cleanDialogueText(match[1] || match[2])
     });
 
@@ -348,23 +386,110 @@ function paragraphToBeats(paragraph) {
   ];
 }
 
-function inferSpeakerFromContext(context) {
+function inferSpeakerFromContext(context, followingContext = "") {
   const compact = context.replace(/\s+/g, "");
-  const matches = [...compact.matchAll(SPEAKER_CONTEXT_RE)];
+  const clauses = compact.split(/[。！？；;，,、\n\r]/).filter(Boolean);
 
-  if (matches.length === 0) {
+  for (let index = clauses.length - 1; index >= 0; index -= 1) {
+    const speaker = extractSpeakerFromSpeechClause(clauses[index]);
+    if (speaker !== UNKNOWN) {
+      return speaker;
+    }
+  }
+
+  return inferSpeakerFromFollowingContext(followingContext);
+}
+
+function inferSpeakerFromFollowingContext(context) {
+  const compact = context.replace(/\s+/g, "");
+  const speechVerbMatch = compact.match(SPEECH_VERB_RE);
+
+  if (!speechVerbMatch) {
     return UNKNOWN;
   }
 
-  return normalizeSpeaker(matches[matches.length - 1][1]);
+  const beforeVerb = compact.slice(0, speechVerbMatch.index);
+  const clauses = beforeVerb.split(/[。！？；;，,、\n\r]/).filter(Boolean);
+
+  for (const clause of clauses) {
+    const speaker = extractSpeakerFromPreVerbText(clause);
+    if (speaker !== UNKNOWN) {
+      return speaker;
+    }
+  }
+
+  return UNKNOWN;
+}
+
+function extractSpeakerFromSpeechClause(clause) {
+  if (!SPEECH_VERB_SUFFIX_RE.test(clause)) {
+    return UNKNOWN;
+  }
+
+  const beforeVerb = clause.replace(SPEECH_VERB_SUFFIX_RE, "");
+  return extractSpeakerFromPreVerbText(beforeVerb);
+}
+
+function extractSpeakerFromPreVerbText(text) {
+  const cleaned = stripTrailingSpeakerActions(normalizeSpeaker(text));
+  const markerMatch = cleaned.match(SPEAKER_ACTION_MARKER_RE);
+
+  if (markerMatch?.index > 0) {
+    const candidate = normalizeSpeaker(cleaned.slice(0, markerMatch.index));
+    if (isUsableSpeakerName(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (markerMatch?.index === 0) {
+    return UNKNOWN;
+  }
+
+  return isUsableSpeakerName(cleaned) ? cleaned : UNKNOWN;
+}
+
+function stripTrailingSpeakerActions(text) {
+  let cleaned = text;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const match = cleaned.match(SPEAKER_SUFFIX_ACTION_RE);
+    if (!match || !match[1]) {
+      break;
+    }
+    cleaned = normalizeSpeaker(match[1]);
+  }
+
+  return cleaned;
 }
 
 function normalizeSpeaker(name) {
   return name
     .replace(/[“”"'：:，,。！？!?、]/g, "")
     .replace(/^(?:柜台后|门外|她|他|我|你|那人)/, "")
+    .replace(/^那(?=[\u4e00-\u9fa5A-Za-z0-9_·]{2,})/, "")
+    .replace(SPEECH_VERB_SUFFIX_RE, "")
     .trim()
     .slice(0, 16) || UNKNOWN;
+}
+
+function isUsableSpeakerName(name) {
+  if (!name || name === UNKNOWN || COMMON_DESCRIPTOR_NAMES.has(name)) {
+    return false;
+  }
+
+  if (DESCRIPTOR_NAME_RE.test(name)) {
+    return false;
+  }
+
+  if (name.length < 2 || name.length > 4) {
+    return false;
+  }
+
+  if (SPEECH_VERB_RE.test(name)) {
+    return false;
+  }
+
+  return /^[\u4e00-\u9fa5A-Za-z0-9_·]+$/.test(name);
 }
 
 function cleanDialogueText(text) {

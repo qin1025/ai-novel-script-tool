@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AI 小说转剧本工具</title>
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./styles.css?v=2026-06-06-mimo">
   </head>
   <body>
     <main class="app-shell">
@@ -33,7 +33,47 @@
           </div>
 
           <label class="field-label" for="titleInput">项目标题</label>
-          <input id="titleInput" class="title-input" type="text" value="雾城来信">
+          <input id="titleInput" class="title-input" type="text" placeholder="导入后自动填入，或手动输入">
+
+          <section class="api-settings" aria-label="API 设置">
+            <label class="api-toggle">
+              <input id="apiEnabled" type="checkbox">
+              <span>API 增强</span>
+            </label>
+            <button id="mimoPresetButton" type="button" class="preset-button">MiMo 2.5</button>
+            <div class="api-grid">
+              <label>
+                <span>服务</span>
+                <select id="apiProvider">
+                  <option value="generic">通用 OpenAI</option>
+                  <option value="mimo">MiMo 2.5</option>
+                </select>
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input id="apiBaseUrl" type="url" placeholder="https://api.example.com/v1">
+              </label>
+              <label>
+                <span>API Key</span>
+                <input id="apiKey" type="password" placeholder="sk-...">
+              </label>
+              <label>
+                <span>Model</span>
+                <input id="apiModel" type="text" placeholder="model-name">
+              </label>
+              <label>
+                <span>鉴权</span>
+                <select id="apiAuthMode">
+                  <option value="bearer">Bearer</option>
+                  <option value="api-key">api-key</option>
+                </select>
+              </label>
+              <label>
+                <span>章节数</span>
+                <input id="apiChapterLimit" type="number" min="3" step="1" value="3">
+              </label>
+            </div>
+          </section>
 
           <label class="field-label" for="novelInput">正文</label>
           <textarea id="novelInput" class="novel-input" spellcheck="false"></textarea>
@@ -88,6 +128,6 @@
       </section>
     </main>
 
-    <script type="module" src="./src/app.js"></script>
+    <script type="module" src="./src/app.js?v=2026-06-06-mimo"></script>
   </body>
 </html>

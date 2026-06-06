@@ -17,6 +17,8 @@ metadata:
   generated_at: "2026-06-05T00:00:00.000Z"
   generator: "AI Novel Script Tool"
   source_chapter_count: 3
+  api_model: "可选，API 模式下的模型名"
+  api_processed_chapter_count: 3
 characters:
   - id: "char001"
     name: "林舟"
@@ -58,6 +60,8 @@ chapters:
 | `chapters[].scenes` | array | 是 | 章节内的场景列表。 |
 | `scenes[].beats` | array | 是 | 场景内的动作、对白、转场和备注。 |
 | `beats[].type` | enum | 是 | `action`、`dialogue`、`transition`、`note` 之一。 |
+
+API 增强模式下，`metadata.api_model` 记录使用的模型，`metadata.api_processed_chapter_count` 记录实际交给 API 处理的章节数。这样作者能区分“全书来源章节数”和“本次模型处理章节数”。
 
 ## 设计原则
 
