@@ -22,7 +22,6 @@ metadata:
 characters:
   - id: "char001"
     name: "林舟"
-    aliases: []
     role: "待确认"
     first_appearance: "ch001"
 chapters:
@@ -61,7 +60,7 @@ chapters:
 | `scenes[].beats` | array | 是 | 场景内的动作、对白、转场和备注。 |
 | `beats[].type` | enum | 是 | `action`、`dialogue`、`transition`、`note` 之一。 |
 
-API 增强模式下，`metadata.api_model` 记录使用的模型，`metadata.api_processed_chapter_count` 记录实际交给 API 处理的章节数。这样作者能区分“全书来源章节数”和“本次模型处理章节数”。
+API 增强模式下，`metadata.api_model` 记录使用的模型，`metadata.api_processed_chapter_count` 记录实际交给 API 处理的章节数。当前 API 模式会处理检测到的全部章节，输入文本仍应满足至少三章。
 
 ## 设计原则
 

@@ -182,7 +182,6 @@ export function buildScriptProject(text, options = {}) {
     characters: [...characterMap.entries()].map(([name, firstChapter], index) => ({
       id: makeId("char", index + 1),
       name,
-      aliases: [],
       role: UNKNOWN,
       first_appearance: firstChapter
     })),

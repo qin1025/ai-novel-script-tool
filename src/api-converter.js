@@ -7,7 +7,6 @@ import {
 const GENERATOR_NAME = "AI Novel Script Tool API Mode";
 const UNKNOWN = "待确认";
 const ALLOWED_BEAT_TYPES = new Set(["action", "dialogue", "transition", "note"]);
-const MIMO_MAX_COMPLETION_TOKENS = 8192;
 
 export function buildChatCompletionsUrl(baseUrl) {
   const trimmed = String(baseUrl || "").trim().replace(/\/+$/, "");
@@ -43,8 +42,8 @@ export function buildChatRequestOptions({
   apiKey,
   model,
   messages,
-  provider = "generic",
-  authMode = "bearer"
+  authMode = "bearer",
+  requestBody = {}
 }) {
   const headers = {
     "Content-Type": "application/json"
@@ -59,15 +58,9 @@ export function buildChatRequestOptions({
   const body = {
     model: model.trim(),
     temperature: 0.2,
-    messages
+    messages,
+    ...requestBody
   };
-
-  if (provider === "mimo") {
-    body.stream = false;
-    body.max_completion_tokens = MIMO_MAX_COMPLETION_TOKENS;
-    body.thinking = { type: "disabled" };
-    body.response_format = { type: "json_object" };
-  }
 
   return {
     method: "POST",
@@ -80,13 +73,44 @@ export async function requestChapterScript({
   apiKey,
   baseUrl,
   model,
-  provider = "generic",
   authMode = "bearer",
+  requestBody = {},
   useProxy = false,
+  useConfiguredProxy = false,
   chapter,
   schemaVersion = "1.0",
   fetchImpl = globalThis.fetch
 }) {
+  if (typeof fetchImpl !== "function") {
+    throw new Error("当前浏览器不支持 fetch，无法直接调用 API。");
+  }
+
+  const messages = buildChapterMessages(chapter, schemaVersion);
+
+  if (useConfiguredProxy) {
+    const response = await fetchImpl(
+      "/api/chat/completions",
+      buildConfiguredProxyRequestOptions(messages)
+    );
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const message =
+        payload?.error?.message ||
+        payload?.message ||
+        `API 请求失败：HTTP ${response.status || ""}`.trim();
+      throw new Error(message);
+    }
+
+    const content = payload?.choices?.[0]?.message?.content;
+
+    if (!content) {
+      throw new Error("API 返回中没有 choices[0].message.content。");
+    }
+
+    return extractJsonObject(content);
+  }
+
   if (!apiKey?.trim()) {
     throw new Error("请填写 API Key。");
   }
@@ -95,17 +119,13 @@ export async function requestChapterScript({
     throw new Error("请填写模型名称。");
   }
 
-  if (typeof fetchImpl !== "function") {
-    throw new Error("当前浏览器不支持 fetch，无法直接调用 API。");
-  }
-
   const targetUrl = buildChatCompletionsUrl(baseUrl);
   const requestOptions = buildChatRequestOptions({
     apiKey,
     model,
-    provider,
     authMode,
-    messages: buildChapterMessages(chapter, schemaVersion)
+    requestBody,
+    messages
   });
   const response = await fetchImpl(
     useProxy ? "/api/chat/completions" : targetUrl,
@@ -135,18 +155,16 @@ export async function requestChapterScript({
 
 export async function convertNovelWithApi(text, options = {}) {
   const chapters = splitChapters(text);
-  const maxChapters = normalizeMaxChapters(options.maxChapters, chapters.length);
-  const selectedChapters = chapters.slice(0, maxChapters);
   const normalizedEntries = [];
   let sceneCounter = 0;
   let beatCounter = 0;
 
-  for (let index = 0; index < selectedChapters.length; index += 1) {
-    const chapter = selectedChapters[index];
+  for (let index = 0; index < chapters.length; index += 1) {
+    const chapter = chapters[index];
 
     options.onProgress?.({
       current: index + 1,
-      total: selectedChapters.length,
+      total: chapters.length,
       title: chapter.title
     });
 
@@ -154,9 +172,10 @@ export async function convertNovelWithApi(text, options = {}) {
       apiKey: options.apiKey,
       baseUrl: options.baseUrl,
       model: options.model,
-      provider: options.provider,
       authMode: options.authMode,
+      requestBody: options.requestBody,
       useProxy: options.useProxy,
+      useConfiguredProxy: options.useConfiguredProxy,
       chapter,
       fetchImpl: options.fetchImpl
     });
@@ -193,12 +212,6 @@ export async function convertNovelWithApi(text, options = {}) {
   };
   const warnings = validateProject(project);
 
-  if (chapters.length > normalizedChapters.length) {
-    warnings.push(
-      `API 模式当前生成前 ${normalizedChapters.length} 章；原文共有 ${chapters.length} 章。可调大“API 处理章节数”。`
-    );
-  }
-
   return {
     project,
     warnings,
@@ -219,6 +232,16 @@ function buildProxyRequestOptions(targetUrl, requestOptions) {
         body: JSON.parse(requestOptions.body)
       }
     })
+  };
+}
+
+function buildConfiguredProxyRequestOptions(messages) {
+  return {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ messages })
   };
 }
 
@@ -263,16 +286,6 @@ function buildChapterMessages(chapter, schemaVersion) {
       ].join("\n")
     }
   ];
-}
-
-function normalizeMaxChapters(value, chapterCount) {
-  const parsed = Number.parseInt(value, 10);
-
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return Math.min(3, chapterCount);
-  }
-
-  return Math.min(parsed, chapterCount);
 }
 
 function normalizeApiChapter(apiChapter, sourceChapter, chapterIndex, counters) {
@@ -368,7 +381,6 @@ function collectCharacters(entries) {
   return [...map.values()].map((character, index) => ({
     id: makeId("char", index + 1),
     name: character.name,
-    aliases: [],
     role: character.role || UNKNOWN,
     first_appearance: character.firstChapter
   }));

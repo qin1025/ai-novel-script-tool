@@ -1,11 +1,11 @@
-import { convertNovelWithApi } from "./api-converter.js?v=2026-06-06-mimo";
-import { convertNovelToYaml } from "./converter.js?v=2026-06-06-mimo";
-import { decodeTextBytes } from "./text-decoding.js?v=2026-06-06-mimo";
+import { convertNovelWithApi } from "./api-converter.js?v=2026-06-06-config";
+import { convertNovelToYaml } from "./converter.js?v=2026-06-06-config";
+import { decodeTextBytes } from "./text-decoding.js?v=2026-06-06-config";
 import {
   buildImportedTextPreview,
   buildYamlPreview,
   formatNumber
-} from "./output-preview.js?v=2026-06-06-mimo";
+} from "./output-preview.js?v=2026-06-06-config";
 
 const sampleNovel = `《雾城来信》
 
@@ -32,14 +32,8 @@ const elements = {
   statusText: document.querySelector("#statusText"),
   fileInput: document.querySelector("#fileInput"),
   convertButton: document.querySelector("#convertButton"),
-  apiEnabled: document.querySelector("#apiEnabled"),
-  apiProvider: document.querySelector("#apiProvider"),
-  apiBaseUrl: document.querySelector("#apiBaseUrl"),
-  apiKey: document.querySelector("#apiKey"),
-  apiModel: document.querySelector("#apiModel"),
-  apiAuthMode: document.querySelector("#apiAuthMode"),
-  apiChapterLimit: document.querySelector("#apiChapterLimit"),
-  mimoPresetButton: document.querySelector("#mimoPresetButton"),
+  apiStatusLabel: document.querySelector("#apiStatusLabel"),
+  apiStatusDetail: document.querySelector("#apiStatusDetail"),
   loadSampleButton: document.querySelector("#loadSampleButton"),
   clearButton: document.querySelector("#clearButton"),
   copyButton: document.querySelector("#copyButton"),
@@ -56,8 +50,15 @@ let latestResult = null;
 let latestImportEncoding = "";
 let latestImportedText = "";
 let latestYamlPreview = null;
+let apiConfigStatus = {
+  enabled: false,
+  configured: false,
+  loading: true,
+  message: "正在读取 api-config.json..."
+};
 
-loadApiSettings();
+renderApiConfigStatus();
+let apiConfigLoadPromise = loadApiConfigStatus();
 renderEmptyState();
 
 elements.form.addEventListener("submit", async (event) => {
@@ -82,28 +83,6 @@ elements.loadSampleButton.addEventListener("click", async () => {
 elements.novelInput.addEventListener("input", () => {
   latestImportedText = "";
   latestImportEncoding = "";
-});
-
-for (const element of [
-  elements.apiEnabled,
-  elements.apiProvider,
-  elements.apiBaseUrl,
-  elements.apiModel,
-  elements.apiAuthMode,
-  elements.apiChapterLimit
-]) {
-  element.addEventListener("change", saveApiSettings);
-}
-
-elements.mimoPresetButton.addEventListener("click", () => {
-  elements.apiEnabled.checked = true;
-  elements.apiProvider.value = "mimo";
-  elements.apiBaseUrl.value = "https://api.xiaomimimo.com/v1";
-  elements.apiModel.value = "mimo-v2.5-pro";
-  elements.apiAuthMode.value = "api-key";
-  elements.apiChapterLimit.value = elements.apiChapterLimit.value || "3";
-  saveApiSettings();
-  setStatus("已应用 MiMo 2.5 预设，请填写 API Key 后生成", true);
 });
 
 elements.clearButton.addEventListener("click", () => {
@@ -198,21 +177,25 @@ async function convertCurrentText() {
   }
 
   try {
+    await apiConfigLoadPromise;
+    const shouldUseApi = apiConfigStatus.enabled && apiConfigStatus.configured;
+
+    if (apiConfigStatus.enabled && !apiConfigStatus.configured) {
+      throw new Error(apiConfigStatus.message || "api-config.json 配置不完整。");
+    }
+
     setBusy(true);
-    setStatus(formatStatus(getApiSettings().enabled ? "正在调用 API..." : "正在生成 YAML..."), true);
+    setStatus(
+      formatStatus(shouldUseApi ? "正在调用配置文件 API..." : "正在生成 YAML..."),
+      true
+    );
     await nextFrame();
 
-    const apiSettings = getApiSettings();
-    latestResult = apiSettings.enabled
+    latestResult = shouldUseApi
       ? await convertNovelWithApi(text, {
           title: elements.titleInput.value,
-          apiKey: apiSettings.apiKey,
-          baseUrl: apiSettings.baseUrl,
-          model: apiSettings.model,
-          provider: apiSettings.provider,
-          authMode: apiSettings.authMode,
-          useProxy: true,
-          maxChapters: apiSettings.maxChapters,
+          model: apiConfigStatus.model,
+          useConfiguredProxy: true,
           onProgress: ({ current, total, title }) => {
             setStatus(
               formatStatus(`API 生成中 ${current}/${total}：${title}`),
@@ -313,41 +296,66 @@ function getCurrentSourceText() {
   return latestImportedText || elements.novelInput.value;
 }
 
-function getApiSettings() {
-  return {
-    enabled: elements.apiEnabled.checked,
-    provider: elements.apiProvider.value,
-    baseUrl: elements.apiBaseUrl.value.trim(),
-    apiKey: elements.apiKey.value.trim(),
-    model: elements.apiModel.value.trim(),
-    authMode: elements.apiAuthMode.value,
-    maxChapters: Number.parseInt(elements.apiChapterLimit.value, 10) || 3
-  };
+async function loadApiConfigStatus() {
+  try {
+    const response = await fetch("/api/config", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || "无法读取 api-config.json。");
+    }
+
+    apiConfigStatus = {
+      enabled: Boolean(payload.enabled),
+      configured: Boolean(payload.configured),
+      baseUrl: payload.baseUrl || "",
+      model: payload.model || "",
+      authHeader: payload.authHeader || "bearer",
+      hasApiKey: Boolean(payload.hasApiKey),
+      loading: false,
+      message: payload.message || ""
+    };
+  } catch (error) {
+    apiConfigStatus = {
+      enabled: false,
+      configured: false,
+      loading: false,
+      message: "未连接本地服务，使用本地转换。"
+    };
+  }
+
+  renderApiConfigStatus();
 }
 
-function loadApiSettings() {
-  const saved = JSON.parse(localStorage.getItem("scriptToolApiSettings") || "{}");
+function renderApiConfigStatus() {
+  elements.apiStatusLabel.className = "";
+  elements.apiStatusDetail.className = "";
 
-  elements.apiEnabled.checked = Boolean(saved.enabled);
-  elements.apiProvider.value = saved.provider || "generic";
-  elements.apiBaseUrl.value = saved.baseUrl || "";
-  elements.apiModel.value = saved.model || "";
-  elements.apiAuthMode.value = saved.authMode || "bearer";
-  elements.apiChapterLimit.value = saved.maxChapters || "3";
-}
+  if (apiConfigStatus.loading) {
+    elements.apiStatusLabel.textContent = "正在读取 API 配置";
+    elements.apiStatusDetail.textContent = "配置文件：api-config.json";
+    return;
+  }
 
-function saveApiSettings() {
-  localStorage.setItem(
-    "scriptToolApiSettings",
-    JSON.stringify({
-      enabled: elements.apiEnabled.checked,
-      provider: elements.apiProvider.value,
-      baseUrl: elements.apiBaseUrl.value.trim(),
-      model: elements.apiModel.value.trim(),
-      authMode: elements.apiAuthMode.value,
-      maxChapters: elements.apiChapterLimit.value || "3"
-    })
-  );
+  if (apiConfigStatus.enabled && apiConfigStatus.configured) {
+    elements.apiStatusLabel.textContent = "API 增强已启用";
+    elements.apiStatusLabel.className = "is-ok";
+    elements.apiStatusDetail.textContent =
+      `${apiConfigStatus.model || "未命名模型"} · ${apiConfigStatus.authHeader || "bearer"} · 密钥已加载`;
+    return;
+  }
+
+  if (apiConfigStatus.enabled) {
+    elements.apiStatusLabel.textContent = "API 配置不完整";
+    elements.apiStatusLabel.className = "is-error";
+    elements.apiStatusDetail.textContent =
+      apiConfigStatus.message || "请检查 api-config.json。";
+    return;
+  }
+
+  elements.apiStatusLabel.textContent = "本地转换模式";
+  elements.apiStatusDetail.textContent =
+    apiConfigStatus.message || "如需 API 增强，请编辑 api-config.json。";
 }
 
 function setBusy(isBusy) {
@@ -355,14 +363,6 @@ function setBusy(isBusy) {
   elements.fileInput.disabled = isBusy;
   elements.clearButton.disabled = isBusy;
   elements.loadSampleButton.disabled = isBusy;
-  elements.apiEnabled.disabled = isBusy;
-  elements.apiProvider.disabled = isBusy;
-  elements.apiBaseUrl.disabled = isBusy;
-  elements.apiKey.disabled = isBusy;
-  elements.apiModel.disabled = isBusy;
-  elements.apiAuthMode.disabled = isBusy;
-  elements.apiChapterLimit.disabled = isBusy;
-  elements.mimoPresetButton.disabled = isBusy;
 }
 
 function nextFrame() {

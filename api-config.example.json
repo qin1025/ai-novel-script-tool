@@ -1,0 +1,17 @@
+{
+  "enabled": false,
+  "baseUrl": "https://api.xiaomimimo.com/v1",
+  "apiKey": "",
+  "model": "mimo-v2.5-pro",
+  "authHeader": "api-key",
+  "requestBody": {
+    "stream": false,
+    "max_completion_tokens": 8192,
+    "thinking": {
+      "type": "disabled"
+    },
+    "response_format": {
+      "type": "json_object"
+    }
+  }
+}

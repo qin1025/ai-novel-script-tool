@@ -29,31 +29,39 @@ D:\ai-novel-script-tool\start-tool.bat
 
 ## API 增强模式
 
-勾选“API 增强”后填写：
+API 参数不在使用界面填写。先编辑项目根目录的 `api-config.json`，再打开工具页面：
 
-```text
-Base URL: 你的 OpenAI-compatible 接口地址，例如 https://api.example.com/v1
-API Key: 你的密钥
-Model: 你的模型名
-章节数: 本次交给 API 处理的章节数量
+```json
+{
+  "enabled": true,
+  "baseUrl": "https://api.xiaomimimo.com/v1",
+  "apiKey": "你的密钥",
+  "model": "mimo-v2.5-pro",
+  "authHeader": "api-key",
+  "requestBody": {
+    "stream": false,
+    "max_completion_tokens": 8192,
+    "thinking": { "type": "disabled" },
+    "response_format": { "type": "json_object" }
+  }
+}
 ```
 
-点击“生成 YAML”后，工具会按章节调用 `/chat/completions`，要求模型返回 JSON，再由本地转换成 YAML。API Key 只在当前页面内使用，不写入 README 或 YAML；Base URL、Model、章节数会保存在浏览器本地设置里。
+点击“生成 YAML”后，工具会按检测到的全部章节调用 `/chat/completions`，要求模型返回 JSON，再由本地转换成 YAML。页面只显示 API 是否启用、模型名和鉴权方式，不显示 API Key。
 
-`start-tool.bat` 会启动 `server.py`，API 请求会先发到本机 `/api/chat/completions`，再由本机转发到外部模型接口。这样可以避免很多第三方接口的浏览器跨域限制。
+`start-tool.bat` 会启动 `server.py`。API Key 只由本机服务读取，浏览器端不会保存或发送密钥配置；请求会先发到本机 `/api/chat/completions`，再由本机转发到外部模型接口。这样可以避免很多第三方接口的浏览器跨域限制。
 
 ### MiMo 2.5
 
-小米 MiMo 2.5 可以直接点“MiMo 2.5”预设，工具会自动填入：
+当前 `api-config.json` 已按 MiMo 2.5 模板创建，默认禁用：
 
 ```text
-服务: MiMo 2.5
 Base URL: https://api.xiaomimimo.com/v1
 Model: mimo-v2.5-pro
 鉴权: api-key
 ```
 
-你只需要填写自己的 API Key，然后设置本次处理章节数。工具会调用 `/chat/completions`，并按 MiMo 文档附带：
+你只需要填入自己的 API Key，并把 `enabled` 改为 `true`。工具会调用 `/chat/completions`，并按配置文件附带：
 
 ```json
 {
@@ -104,8 +112,10 @@ styles.css
 src/
   app.js
   converter.js
-tests/
+  tests/
   converter.test.mjs
+api-config.example.json
+api-config.json
 docs/
   YAML_SCHEMA.md
   superpowers/specs/2026-06-05-ai-novel-script-tool-design.md

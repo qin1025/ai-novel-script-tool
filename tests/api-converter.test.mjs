@@ -98,13 +98,18 @@ await runTest("sends chapter text to an OpenAI-compatible API", async () => {
   assert.equal(result.characters[0].role, "主角");
 });
 
-await runTest("builds MiMo 2.5 request options with api-key auth", () => {
+await runTest("builds request options with configurable extra body fields", () => {
   const options = buildChatRequestOptions({
     apiKey: "mimo-key",
     model: "mimo-v2.5-pro",
     messages: [{ role: "user", content: "hello" }],
-    provider: "mimo",
-    authMode: "api-key"
+    authMode: "api-key",
+    requestBody: {
+      stream: false,
+      max_completion_tokens: 8192,
+      thinking: { type: "disabled" },
+      response_format: { type: "json_object" }
+    }
   });
   const body = JSON.parse(options.body);
 
@@ -115,6 +120,49 @@ await runTest("builds MiMo 2.5 request options with api-key auth", () => {
   assert.equal(body.max_completion_tokens, 8192);
   assert.deepEqual(body.thinking, { type: "disabled" });
   assert.deepEqual(body.response_format, { type: "json_object" });
+});
+
+await runTest("uses configured local proxy without exposing API credentials", async () => {
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: "第一章",
+                  summary: "测试。",
+                  characters: [],
+                  scenes: []
+                })
+              }
+            }
+          ]
+        };
+      }
+    };
+  };
+
+  await requestChapterScript({
+    useConfiguredProxy: true,
+    chapter: {
+      id: "ch001",
+      title: "第一章",
+      content: "测试"
+    },
+    fetchImpl: fakeFetch
+  });
+
+  const proxyBody = JSON.parse(calls[0].options.body);
+
+  assert.equal(calls[0].url, "/api/chat/completions");
+  assert.ok(Array.isArray(proxyBody.messages));
+  assert.equal(Object.hasOwn(proxyBody, "targetUrl"), false);
+  assert.equal(JSON.stringify(proxyBody).includes("mimo-key"), false);
 });
 
 await runTest("uses local proxy when requested", async () => {
@@ -146,7 +194,6 @@ await runTest("uses local proxy when requested", async () => {
     apiKey: "mimo-key",
     baseUrl: "https://api.xiaomimimo.com/v1",
     model: "mimo-v2.5-pro",
-    provider: "mimo",
     authMode: "api-key",
     useProxy: true,
     chapter: {
@@ -217,12 +264,84 @@ await runTest("builds YAML project with API character roles", async () => {
       apiKey: "test-key",
       baseUrl: "https://api.example.com/v1",
       model: "test-model",
-      maxChapters: 1,
       fetchImpl: fakeFetch
     }
   );
 
   assert.equal(result.project.characters[0].name, "白冷叶");
   assert.equal(result.project.characters[0].role, "主角");
-  assert.match(result.yaml, /api_processed_chapter_count: 1/);
+  assert.match(result.yaml, /api_processed_chapter_count: 3/);
+});
+
+await runTest("processes every detected chapter in API mode", async () => {
+  let callCount = 0;
+  const fakeFetch = async () => {
+    callCount += 1;
+    return {
+      ok: true,
+      async json() {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: `第${callCount}章`,
+                  summary: "测试。",
+                  characters: [{ name: "白冷叶", role: "主角" }],
+                  scenes: [
+                    {
+                      title: "第一场",
+                      location: "家门口",
+                      time: "夜晚",
+                      pov: "白冷叶",
+                      emotional_tone: "愤怒",
+                      characters: ["白冷叶"],
+                      beats: [
+                        {
+                          type: "dialogue",
+                          speaker: "白冷叶",
+                          text: "我还在。"
+                        }
+                      ],
+                      props: [],
+                      revision_notes: []
+                    }
+                  ]
+                })
+              }
+            }
+          ]
+        };
+      }
+    };
+  };
+
+  const result = await convertNovelWithApi(
+    `第一章 起声
+白冷叶：“你给我站住！”
+
+第二章 余波
+白冷叶：“我会回来。”
+
+第三章 收束
+白冷叶：“结束了。”
+
+第四章 新局
+白冷叶：“继续。”`,
+    {
+      apiKey: "test-key",
+      baseUrl: "https://api.example.com/v1",
+      model: "test-model",
+      fetchImpl: fakeFetch
+    }
+  );
+
+  assert.equal(callCount, 4);
+  assert.equal(result.project.chapters.length, 4);
+  assert.equal(result.project.metadata.api_processed_chapter_count, 4);
+  assert.equal(
+    result.warnings.some((warning) => warning.includes("API 模式当前生成前")),
+    false
+  );
+  assert.doesNotMatch(result.yaml, /\baliases:/);
 });

@@ -153,3 +153,15 @@ runTest("serializes stable screenplay keys to YAML", () => {
   assert.match(result.yaml, /emotional_tone:/);
   assert.match(result.yaml, /revision_notes:/);
 });
+
+runTest("does not emit empty character alias fields", () => {
+  const result = convertNovelToYaml(sampleNovel, { title: "雾城来信" });
+
+  assert.equal(
+    result.project.characters.every(
+      (character) => !Object.hasOwn(character, "aliases")
+    ),
+    true
+  );
+  assert.doesNotMatch(result.yaml, /\baliases:/);
+});
