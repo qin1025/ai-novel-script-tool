@@ -1,6 +1,7 @@
 const testFiles = [
   "text-decoding.test.mjs",
   "api-converter.test.mjs",
+  "chapter-summary.test.mjs",
   "output-preview.test.mjs",
   "converter.test.mjs"
 ];

@@ -2,7 +2,7 @@
 setlocal
 
 set "PORT=5173"
-set "APP_URL=http://127.0.0.1:%PORT%/index.html?v=2026-06-06-config"
+set "APP_URL=http://127.0.0.1:%PORT%/index.html?v=2026-06-07-summary"
 
 where py >nul 2>nul
 if %errorlevel%==0 (
