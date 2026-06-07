@@ -1,5 +1,4 @@
 {
-  "enabled": false,
   "baseUrl": "https://api.xiaomimimo.com/v1",
   "apiKey": "",
   "model": "mimo-v2.5-pro",

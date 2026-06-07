@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   buildChatRequestOptions,
   buildChatCompletionsUrl,
+  ConversionCancelledError,
   convertNovelWithApi,
   extractJsonObject,
   requestChapterScript
@@ -163,6 +164,46 @@ await runTest("uses configured local proxy without exposing API credentials", as
   assert.ok(Array.isArray(proxyBody.messages));
   assert.equal(Object.hasOwn(proxyBody, "targetUrl"), false);
   assert.equal(JSON.stringify(proxyBody).includes("mimo-key"), false);
+});
+
+await runTest("forwards an abort signal to configured proxy requests", async () => {
+  const controller = new AbortController();
+  let receivedSignal;
+  const fakeFetch = async (_url, options) => {
+    receivedSignal = options.signal;
+    return {
+      ok: true,
+      async json() {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: "第一章",
+                  summary: "测试。",
+                  characters: [],
+                  scenes: []
+                })
+              }
+            }
+          ]
+        };
+      }
+    };
+  };
+
+  await requestChapterScript({
+    useConfiguredProxy: true,
+    signal: controller.signal,
+    chapter: {
+      id: "ch001",
+      title: "第一章",
+      content: "测试"
+    },
+    fetchImpl: fakeFetch
+  });
+
+  assert.equal(receivedSignal, controller.signal);
 });
 
 await runTest("uses local proxy when requested", async () => {
@@ -415,4 +456,104 @@ await runTest("limits API mode to configured maxChapters", async () => {
   assert.equal(result.project.chapters.length, 2);
   assert.equal(result.project.metadata.source_chapter_count, 4);
   assert.equal(result.project.metadata.api_processed_chapter_count, 2);
+});
+
+await runTest("retains completed chapters when API conversion is cancelled", async () => {
+  const controller = new AbortController();
+  const progress = [];
+  let callCount = 0;
+  const fakeFetch = async (_url, options) => {
+    callCount += 1;
+
+    if (callCount === 2) {
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    }
+
+    return {
+      ok: true,
+      async json() {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: "第一章 完成",
+                  summary: "第一章已完成。",
+                  characters: [{ name: "林舟", role: "主角" }],
+                  scenes: [
+                    {
+                      title: "第一场",
+                      location: "邮局",
+                      time: "夜晚",
+                      pov: "林舟",
+                      emotional_tone: "悬疑",
+                      characters: ["林舟"],
+                      beats: [
+                        {
+                          type: "dialogue",
+                          speaker: "林舟",
+                          text: "我回来了。"
+                        }
+                      ],
+                      props: [],
+                      revision_notes: []
+                    }
+                  ]
+                })
+              }
+            }
+          ]
+        };
+      }
+    };
+  };
+
+  try {
+    await convertNovelWithApi(
+      `第一章 雨夜
+林舟：“我回来了。”
+第二章 黑伞
+林舟继续前进。
+第三章 尾声
+故事结束。`,
+      {
+        model: "test-model",
+        useConfiguredProxy: true,
+        signal: controller.signal,
+        fetchImpl: fakeFetch,
+        onProgress(event) {
+          progress.push(event);
+          if (event.phase === "start" && event.chapterNumber === 2) {
+            controller.abort();
+          }
+        }
+      }
+    );
+    assert.fail("expected conversion cancellation");
+  } catch (error) {
+    assert.ok(error instanceof ConversionCancelledError);
+    assert.equal(error.partialResult.project.chapters.length, 1);
+    assert.equal(error.partialResult.project.metadata.conversion_status, "cancelled");
+    assert.equal(error.partialResult.project.metadata.api_processed_chapter_count, 1);
+    assert.equal(error.partialResult.project.metadata.api_planned_chapter_count, 3);
+    assert.match(error.partialResult.yaml, /conversion_status: "cancelled"/);
+  }
+
+  assert.deepEqual(
+    progress.map(({ phase, current, total, chapterNumber }) => ({
+      phase,
+      current,
+      total,
+      chapterNumber
+    })),
+    [
+      { phase: "start", current: 0, total: 3, chapterNumber: 1 },
+      { phase: "complete", current: 1, total: 3, chapterNumber: 1 },
+      { phase: "start", current: 1, total: 3, chapterNumber: 2 }
+    ]
+  );
 });

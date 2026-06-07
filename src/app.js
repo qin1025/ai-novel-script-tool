@@ -1,11 +1,17 @@
-import { convertNovelWithApi } from "./api-converter.js?v=2026-06-06-config";
-import { convertNovelToYaml } from "./converter.js?v=2026-06-06-config";
-import { decodeTextBytes } from "./text-decoding.js?v=2026-06-06-config";
+import {
+  ConversionCancelledError,
+  convertNovelWithApi
+} from "./api-converter.js?v=2026-06-07-softui";
+import {
+  buildChapterSummaries,
+  getVisibleChapterSummaries
+} from "./chapter-summary.js?v=2026-06-07-summary";
+import { decodeTextBytes } from "./text-decoding.js?v=2026-06-07-softui";
 import {
   buildImportedTextPreview,
   buildYamlPreview,
   formatNumber
-} from "./output-preview.js?v=2026-06-06-config";
+} from "./output-preview.js?v=2026-06-07-softui";
 
 const sampleNovel = `《雾城来信》
 
@@ -32,6 +38,13 @@ const elements = {
   statusText: document.querySelector("#statusText"),
   fileInput: document.querySelector("#fileInput"),
   convertButton: document.querySelector("#convertButton"),
+  cancelButton: document.querySelector("#cancelButton"),
+  progressCard: document.querySelector("#progressCard"),
+  progressBar: document.querySelector("#progressBar"),
+  progressPercent: document.querySelector("#progressPercent"),
+  progressDetail: document.querySelector("#progressDetail"),
+  progressChapter: document.querySelector("#progressChapter"),
+  progressTrack: document.querySelector(".progress-track"),
   apiStatusLabel: document.querySelector("#apiStatusLabel"),
   apiStatusDetail: document.querySelector("#apiStatusDetail"),
   loadSampleButton: document.querySelector("#loadSampleButton"),
@@ -43,17 +56,22 @@ const elements = {
   characterCount: document.querySelector("#characterCount"),
   beatCount: document.querySelector("#beatCount"),
   warningList: document.querySelector("#warningList"),
-  structureCanvas: document.querySelector("#structureCanvas")
+  chapterSummaryList: document.querySelector("#chapterSummaryList"),
+  toggleChaptersButton: document.querySelector("#toggleChaptersButton"),
+  pointerGlow: document.querySelector("#pointerGlow")
 };
 
 let latestResult = null;
 let latestImportEncoding = "";
 let latestImportedText = "";
 let latestYamlPreview = null;
+let activeController = null;
+let latestChapterSummaries = [];
+let showAllChapters = false;
 let apiConfigStatus = {
-  enabled: false,
   configured: false,
   loading: true,
+  keySource: "missing",
   maxChapters: 0,
   message: "正在读取 api-config.json..."
 };
@@ -61,6 +79,26 @@ let apiConfigStatus = {
 renderApiConfigStatus();
 let apiConfigLoadPromise = loadApiConfigStatus();
 renderEmptyState();
+setupPointerTracking();
+
+elements.toggleChaptersButton.addEventListener("click", () => {
+  showAllChapters = !showAllChapters;
+  renderChapterSummaries();
+});
+
+elements.cancelButton.addEventListener("click", () => {
+  if (!activeController || activeController.signal.aborted) {
+    return;
+  }
+
+  renderProgress({
+    state: "cancelling",
+    detail: "正在取消任务",
+    chapter: "保留已经完成的章节，请稍候..."
+  });
+  elements.cancelButton.disabled = true;
+  activeController.abort();
+});
 
 elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -77,8 +115,9 @@ elements.loadSampleButton.addEventListener("click", async () => {
   latestYamlPreview = null;
   renderEmptyStats();
   renderWarnings(["示例文本已载入，请点击“生成 YAML”。"]);
-  drawStructure(null);
+  clearChapterSummaries();
   setStatus("示例文本已载入，等待生成", true);
+  renderProgress();
 });
 
 elements.novelInput.addEventListener("input", () => {
@@ -127,11 +166,12 @@ elements.fileInput.addEventListener("change", async (event) => {
     latestYamlPreview = null;
     renderEmptyStats();
     renderWarnings(["文本已导入，请点击“生成 YAML”。"]);
-    drawStructure(null);
+    clearChapterSummaries();
     setStatus(
       `已导入 ${file.name} · ${decoded.encoding}，等待生成 YAML`,
       true
     );
+    renderProgress();
   } catch (error) {
     setStatus(`导入失败：${error.message || "无法读取文件"}`, false);
   } finally {
@@ -179,55 +219,118 @@ async function convertCurrentText() {
 
   try {
     await apiConfigLoadPromise;
-    const shouldUseApi = apiConfigStatus.enabled && apiConfigStatus.configured;
-
-    if (apiConfigStatus.enabled && !apiConfigStatus.configured) {
-      throw new Error(apiConfigStatus.message || "api-config.json 配置不完整。");
+    if (!apiConfigStatus.configured) {
+      throw new Error(apiConfigStatus.message || "API 配置不完整，无法生成剧本。");
     }
 
     setBusy(true);
-    setStatus(
-      formatStatus(shouldUseApi ? "正在调用配置文件 API..." : "正在生成 YAML..."),
-      true
-    );
+    activeController = new AbortController();
+    setStatus(formatStatus("正在调用配置文件 API..."), true);
+    renderProgress({
+      state: "running",
+      percent: 0,
+      detail: "正在分析章节",
+      chapter: "准备发送第一个章节"
+    });
+    setBusy(true, true);
     await nextFrame();
 
-    latestResult = shouldUseApi
-      ? await convertNovelWithApi(text, {
-          title: elements.titleInput.value,
-          model: apiConfigStatus.model,
-          maxChapters: apiConfigStatus.maxChapters,
-          useConfiguredProxy: true,
-          onProgress: ({ current, total, title }) => {
-            setStatus(
-              formatStatus(`API 生成中 ${current}/${total}：${title}`),
-              true
-            );
-          }
-        })
-      : convertNovelToYaml(text, {
-          title: elements.titleInput.value
+    latestResult = await convertNovelWithApi(text, {
+      title: elements.titleInput.value,
+      model: apiConfigStatus.model,
+      maxChapters: apiConfigStatus.maxChapters,
+      useConfiguredProxy: true,
+      signal: activeController.signal,
+      onProgress: ({ phase, current, total, chapterNumber, title }) => {
+        const percent = Math.round((current / Math.max(1, total)) * 100);
+        setStatus(
+          formatStatus(
+            phase === "complete"
+              ? `已完成 ${current}/${total} 章`
+              : `正在生成第 ${chapterNumber}/${total} 章：${title}`
+          ),
+          true
+        );
+        renderProgress({
+          state: "running",
+          percent,
+          detail:
+            phase === "complete"
+              ? `已完成 ${current} / ${total} 章`
+              : `正在生成第 ${chapterNumber} / ${total} 章`,
+          chapter: title
         });
-    latestYamlPreview = buildYamlPreview(latestResult.yaml);
-
-    elements.yamlOutput.value = latestYamlPreview.text;
-    renderStats(latestResult);
-    renderWarnings(latestResult.warnings);
-    drawStructure(latestResult.project);
-    const suffix = latestYamlPreview.truncated
-      ? `，预览 ${formatNumber(latestYamlPreview.text.length)} / 完整 ${formatNumber(latestYamlPreview.originalLength)} 字符`
-      : "";
+      }
+    });
+    renderResult(latestResult);
+    const suffix = previewSuffix();
     setStatus(
       formatStatus(
         `${latestResult.warnings.length > 0 ? "已生成，需校验" : "已生成，可提交"}${suffix}`
       ),
       latestResult.warnings.length === 0
     );
+    renderProgress({
+      state: "complete",
+      percent: 100,
+      detail: "剧本生成完成",
+      chapter: "结果已整理，可继续校验、复制或下载"
+    });
   } catch (error) {
-    setStatus(`生成失败：${error.message || "无法转换文本"}`, false);
+    if (error instanceof ConversionCancelledError) {
+      if (error.partialResult) {
+        latestResult = error.partialResult;
+        renderResult(latestResult);
+        const completed = latestResult.project.metadata.api_processed_chapter_count;
+        const total = latestResult.project.metadata.api_planned_chapter_count;
+        const percent = Math.round((completed / Math.max(1, total)) * 100);
+        setStatus(
+          formatStatus(`任务已取消，已保留 ${completed}/${total} 章部分结果${previewSuffix()}`),
+          false
+        );
+        renderProgress({
+          state: "cancelled",
+          percent,
+          detail: "任务已取消，部分结果已保留",
+          chapter: `已完成 ${completed} / ${total} 章，可下载当前 YAML`
+        });
+      } else {
+        setStatus("任务已取消，尚无已完成章节", false);
+        renderProgress({
+          state: "cancelled",
+          percent: 0,
+          detail: "任务已取消",
+          chapter: "尚无已完成章节，小说正文已保留"
+        });
+      }
+    } else {
+      setStatus(`生成失败：${error.message || "无法转换文本"}`, false);
+      renderProgress({
+        state: "error",
+        detail: "生成过程遇到问题",
+        chapter: error.message || "请检查配置后重试"
+      });
+    }
   } finally {
+    activeController = null;
     setBusy(false);
   }
+}
+
+function renderResult(result) {
+  latestYamlPreview = buildYamlPreview(result.yaml);
+  elements.yamlOutput.value = latestYamlPreview.text;
+  renderStats(result);
+  renderWarnings(result.warnings);
+  latestChapterSummaries = buildChapterSummaries(result.project);
+  showAllChapters = false;
+  renderChapterSummaries();
+}
+
+function previewSuffix() {
+  return latestYamlPreview?.truncated
+    ? `，预览 ${formatNumber(latestYamlPreview.text.length)} / 完整 ${formatNumber(latestYamlPreview.originalLength)} 字符`
+    : "";
 }
 
 function renderEmptyState() {
@@ -239,7 +342,8 @@ function renderEmptyState() {
   elements.statusText.className = "";
   renderEmptyStats();
   renderWarnings(["请输入三章以上小说文本。"]);
-  drawStructure(null);
+  clearChapterSummaries();
+  renderProgress();
 }
 
 function renderEmptyStats() {
@@ -308,23 +412,23 @@ async function loadApiConfigStatus() {
     }
 
     apiConfigStatus = {
-      enabled: Boolean(payload.enabled),
       configured: Boolean(payload.configured),
       baseUrl: payload.baseUrl || "",
       model: payload.model || "",
       authHeader: payload.authHeader || "bearer",
       maxChapters: normalizeMaxChapters(payload.maxChapters),
       hasApiKey: Boolean(payload.hasApiKey),
+      keySource: payload.keySource || "missing",
       loading: false,
       message: payload.message || ""
     };
   } catch (error) {
     apiConfigStatus = {
-      enabled: false,
       configured: false,
       loading: false,
+      keySource: "missing",
       maxChapters: 0,
-      message: "未连接本地服务，使用本地转换。"
+      message: "未连接本地服务，无法使用 API 转换。"
     };
   }
 
@@ -341,29 +445,23 @@ function renderApiConfigStatus() {
     return;
   }
 
-  if (apiConfigStatus.enabled && apiConfigStatus.configured) {
+  if (apiConfigStatus.configured) {
     const limitText =
       apiConfigStatus.maxChapters > 0
         ? ` · 最多 ${apiConfigStatus.maxChapters} 章`
         : "";
-    elements.apiStatusLabel.textContent = "API 增强已启用";
+    elements.apiStatusLabel.textContent =
+      apiConfigStatus.keySource === "user-config" ? "用户 API 已启用" : "内置默认 API 已启用";
     elements.apiStatusLabel.className = "is-ok";
     elements.apiStatusDetail.textContent =
       `${apiConfigStatus.model || "未命名模型"} · ${apiConfigStatus.authHeader || "bearer"} · 密钥已加载${limitText}`;
     return;
   }
 
-  if (apiConfigStatus.enabled) {
-    elements.apiStatusLabel.textContent = "API 配置不完整";
-    elements.apiStatusLabel.className = "is-error";
-    elements.apiStatusDetail.textContent =
-      apiConfigStatus.message || "请检查 api-config.json。";
-    return;
-  }
-
-  elements.apiStatusLabel.textContent = "本地转换模式";
+  elements.apiStatusLabel.textContent = "API 配置不可用";
+  elements.apiStatusLabel.className = "is-error";
   elements.apiStatusDetail.textContent =
-    apiConfigStatus.message || "如需 API 增强，请编辑 api-config.json。";
+    apiConfigStatus.message || "请配置用户 API Key 或提供 api-secret.enc。";
 }
 
 function normalizeMaxChapters(value) {
@@ -376,94 +474,202 @@ function normalizeMaxChapters(value) {
   return Math.floor(number);
 }
 
-function setBusy(isBusy) {
+function setBusy(isBusy, canCancel = false) {
   elements.convertButton.disabled = isBusy;
   elements.fileInput.disabled = isBusy;
   elements.clearButton.disabled = isBusy;
   elements.loadSampleButton.disabled = isBusy;
+  elements.titleInput.disabled = isBusy;
+  elements.novelInput.disabled = isBusy;
+  elements.cancelButton.hidden = !canCancel;
+  elements.cancelButton.disabled = !canCancel;
+}
+
+function renderProgress({
+  state = "idle",
+  percent = 0,
+  detail = "准备开始创作",
+  chapter = "导入小说文本后，即可生成结构化剧本"
+} = {}) {
+  const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+  elements.progressCard.dataset.state = state;
+  elements.progressBar.style.width = `${safePercent}%`;
+  elements.progressPercent.textContent = `${safePercent}%`;
+  elements.progressDetail.textContent = detail;
+  elements.progressChapter.textContent = chapter;
+  elements.progressTrack.setAttribute("aria-valuenow", String(safePercent));
 }
 
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-function drawStructure(project) {
-  const canvas = elements.structureCanvas;
-  const context = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
-
-  context.clearRect(0, 0, width, height);
-  context.fillStyle = "#fbfcfa";
-  context.fillRect(0, 0, width, height);
-
-  if (!project || project.chapters.length === 0) {
-    context.fillStyle = "#647067";
-    context.font = "14px Segoe UI, sans-serif";
-    context.fillText("等待生成结构图", 24, 78);
-    return;
-  }
-
-  const padding = 24;
-  const chapters = project.chapters;
-
-  if (chapters.length > 40) {
-    drawCompactStructure(context, chapters, width, height, padding);
-    return;
-  }
-
-  const gap = 16;
-  const usableWidth = width - padding * 2 - gap * (project.chapters.length - 1);
-  const chapterWidth = usableWidth / project.chapters.length;
-  const colors = ["#246b5b", "#b56b16", "#375d91", "#a33a34"];
-
-  project.chapters.forEach((chapter, chapterIndex) => {
-    const x = padding + chapterIndex * (chapterWidth + gap);
-    const sceneHeight = 18;
-    const sceneGap = 7;
-
-    context.fillStyle = "#1d2521";
-    context.font = "12px Segoe UI, sans-serif";
-    context.fillText(chapter.id, x, 22);
-
-    chapter.scenes.forEach((scene, sceneIndex) => {
-      const y = 38 + sceneIndex * (sceneHeight + sceneGap);
-      const beatCount = Math.max(1, scene.beats.length);
-      const sceneWidth = Math.max(20, Math.min(chapterWidth, beatCount * 18));
-
-      context.fillStyle = colors[(chapterIndex + sceneIndex) % colors.length];
-      context.fillRect(x, y, sceneWidth, sceneHeight);
-      context.fillStyle = "#ffffff";
-      context.font = "11px Segoe UI, sans-serif";
-      context.fillText(String(beatCount), x + 7, y + 13);
-    });
-  });
+function clearChapterSummaries() {
+  latestChapterSummaries = [];
+  showAllChapters = false;
+  renderChapterSummaries();
 }
 
-function drawCompactStructure(context, chapters, width, height, padding) {
-  const maxScenes = Math.max(
-    1,
-    ...chapters.map((chapter) => chapter.scenes.length)
-  );
-  const chartWidth = width - padding * 2;
-  const chartHeight = height - 50;
-  const barWidth = Math.max(1, chartWidth / chapters.length);
+function renderChapterSummaries() {
+  elements.chapterSummaryList.innerHTML = "";
+  const visible = getVisibleChapterSummaries(latestChapterSummaries, showAllChapters);
 
-  context.fillStyle = "#1d2521";
-  context.font = "12px Segoe UI, sans-serif";
-  context.fillText(`${chapters.length} 章结构概览`, padding, 22);
+  if (visible.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "chapter-summary-empty";
+    empty.textContent = "生成剧本后，这里会汇总每章的摘要、场景、角色和 Beat。";
+    elements.chapterSummaryList.append(empty);
+    elements.toggleChaptersButton.hidden = true;
+    return;
+  }
 
-  chapters.forEach((chapter, index) => {
-    const x = padding + index * barWidth;
-    const barHeight = Math.max(
-      2,
-      Math.round((chapter.scenes.length / maxScenes) * chartHeight)
+  for (const chapter of visible) {
+    const card = document.createElement("details");
+    card.className = "chapter-card tilt-card";
+    const summary = document.createElement("summary");
+    summary.className = "chapter-card-summary";
+    summary.append(
+      buildChapterNumber(chapter.number),
+      buildChapterMain(chapter),
+      buildChapterMetrics(chapter)
     );
-    const y = height - padding - barHeight;
+    card.append(summary, buildSceneList(chapter.scenes));
+    elements.chapterSummaryList.append(card);
+  }
 
-    context.fillStyle = index % 2 === 0 ? "#246b5b" : "#375d91";
-    context.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
+  elements.toggleChaptersButton.hidden = latestChapterSummaries.length <= 6;
+  elements.toggleChaptersButton.textContent = showAllChapters ? "收起章节" : "展开全部";
+}
+
+function buildChapterNumber(number) {
+  const badge = document.createElement("span");
+  badge.className = "chapter-number";
+  badge.textContent = String(number).padStart(2, "0");
+  return badge;
+}
+
+function buildChapterMain(chapter) {
+  const main = document.createElement("span");
+  main.className = "chapter-main";
+  const title = document.createElement("strong");
+  title.textContent = chapter.title;
+  const summary = document.createElement("span");
+  summary.textContent = chapter.summary;
+  const meter = document.createElement("span");
+  meter.className = "chapter-intensity";
+  const fill = document.createElement("span");
+  fill.style.width = `${chapter.intensity}%`;
+  meter.append(fill);
+  main.append(title, summary, meter);
+  return main;
+}
+
+function buildChapterMetrics(chapter) {
+  const metrics = document.createElement("span");
+  metrics.className = "chapter-metrics";
+  metrics.append(
+    buildMetric("场景", chapter.sceneCount),
+    buildMetric("角色", chapter.characterCount),
+    buildMetric("Beat", chapter.beatCount)
+  );
+  return metrics;
+}
+
+function buildMetric(label, value) {
+  const metric = document.createElement("span");
+  metric.innerHTML = `<strong>${value}</strong><small>${label}</small>`;
+  return metric;
+}
+
+function buildSceneList(scenes) {
+  const list = document.createElement("div");
+  list.className = "scene-list";
+
+  for (const scene of scenes) {
+    const item = document.createElement("article");
+    item.className = "scene-item";
+    const characters = scene.characters.length > 0 ? scene.characters.join("、") : "待确认";
+    item.innerHTML = `
+      <div><strong>${escapeHtml(scene.title)}</strong><span>${escapeHtml(scene.location)} · ${escapeHtml(scene.emotionalTone)}</span></div>
+      <p>${escapeHtml(characters)}</p>
+      <span>${scene.beatCount} Beat</span>
+    `;
+    list.append(item);
+  }
+
+  return list;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function setupPointerTracking() {
+  const supportsPointerEffects =
+    window.matchMedia("(pointer: fine)").matches &&
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (!supportsPointerEffects) {
+    return;
+  }
+
+  document.documentElement.classList.add("has-pointer-effects");
+  let pointerX = window.innerWidth / 2;
+  let pointerY = window.innerHeight / 2;
+  let glowX = pointerX;
+  let glowY = pointerY;
+  let activeCard = null;
+
+  document.addEventListener("pointermove", (event) => {
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+    const overControl = event.target.closest("button, input, textarea, a, label");
+    const nextCard = overControl ? null : event.target.closest(".tilt-card");
+
+    if (activeCard && activeCard !== nextCard) {
+      resetTilt(activeCard);
+    }
+
+    activeCard = nextCard;
+    if (activeCard) {
+      updateTilt(activeCard, event.clientX, event.clientY);
+    }
   });
+
+  document.addEventListener("pointerleave", () => {
+    if (activeCard) {
+      resetTilt(activeCard);
+      activeCard = null;
+    }
+  });
+
+  const animateGlow = () => {
+    glowX += (pointerX - glowX) * 0.14;
+    glowY += (pointerY - glowY) * 0.14;
+    elements.pointerGlow.style.transform = `translate3d(${glowX}px, ${glowY}px, 0)`;
+    requestAnimationFrame(animateGlow);
+  };
+  requestAnimationFrame(animateGlow);
+}
+
+function updateTilt(card, pointerX, pointerY) {
+  const rect = card.getBoundingClientRect();
+  const relativeX = (pointerX - rect.left) / rect.width;
+  const relativeY = (pointerY - rect.top) / rect.height;
+  card.style.setProperty("--tilt-x", `${(0.5 - relativeY) * 2.2}deg`);
+  card.style.setProperty("--tilt-y", `${(relativeX - 0.5) * 2.2}deg`);
+  card.style.setProperty("--glow-x", `${relativeX * 100}%`);
+  card.style.setProperty("--glow-y", `${relativeY * 100}%`);
+}
+
+function resetTilt(card) {
+  card.style.setProperty("--tilt-x", "0deg");
+  card.style.setProperty("--tilt-y", "0deg");
 }
 
 function downloadText(fileName, text) {

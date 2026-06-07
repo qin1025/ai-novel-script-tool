@@ -2,11 +2,14 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, error
 import json
+from api_secret import decode_secret
 
 
 ROOT = Path(__file__).resolve().parent
 PORT = 5173
 API_CONFIG_FILE = ROOT / "api-config.json"
+API_SECRET_FILE = ROOT / "api-secret.enc"
+PROTECTED_PATHS = {"/api-config.json", "/api-secret.enc"}
 
 
 def build_chat_completions_url(base_url):
@@ -18,12 +21,16 @@ def build_chat_completions_url(base_url):
     return f"{trimmed}/chat/completions"
 
 
-def load_api_config(path=API_CONFIG_FILE):
+def is_protected_path(path):
+    return path.split("?", 1)[0].split("#", 1)[0] in PROTECTED_PATHS
+
+
+def load_api_config(path=API_CONFIG_FILE, secret_path=API_SECRET_FILE):
     if not Path(path).exists():
         return {
-            "enabled": False,
             "baseUrl": "",
             "apiKey": "",
+            "keySource": "missing",
             "model": "",
             "authHeader": "bearer",
             "maxChapters": 0,
@@ -36,10 +43,21 @@ def load_api_config(path=API_CONFIG_FILE):
     if not isinstance(request_body, dict):
         raise ValueError("api-config.json 的 requestBody 必须是对象。")
 
+    user_api_key = str(raw.get("apiKey") or "").strip()
+    bundled_api_key = ""
+    key_source = "user-config" if user_api_key else "missing"
+
+    if not user_api_key and Path(secret_path).exists():
+        try:
+            bundled_api_key = decode_secret(Path(secret_path).read_text(encoding="utf-8"))
+            key_source = "bundled-default"
+        except (OSError, UnicodeError, ValueError):
+            bundled_api_key = ""
+
     return {
-        "enabled": bool(raw.get("enabled", False)),
         "baseUrl": str(raw.get("baseUrl") or "").strip(),
-        "apiKey": str(raw.get("apiKey") or "").strip(),
+        "apiKey": user_api_key or bundled_api_key,
+        "keySource": key_source,
         "model": str(raw.get("model") or "").strip(),
         "authHeader": str(raw.get("authHeader") or "bearer").strip() or "bearer",
         "maxChapters": normalize_max_chapters(raw.get("maxChapters")),
@@ -58,36 +76,31 @@ def normalize_max_chapters(value):
 
 def public_api_config_status(config):
     configured = bool(
-        config.get("enabled")
-        and config.get("baseUrl")
+        config.get("baseUrl")
         and config.get("apiKey")
         and config.get("model")
     )
     status = {
-        "enabled": bool(config.get("enabled")),
         "configured": configured,
         "baseUrl": config.get("baseUrl") or "",
         "model": config.get("model") or "",
         "authHeader": config.get("authHeader") or "bearer",
         "maxChapters": normalize_max_chapters(config.get("maxChapters")),
         "hasApiKey": bool(config.get("apiKey")),
+        "keySource": config.get("keySource") or "missing",
     }
 
-    if status["enabled"] and not configured:
-        status["message"] = "api-config.json 已启用，但 baseUrl、apiKey 或 model 还未填完整。"
-    elif configured:
+    if configured:
         status["message"] = "API 配置已加载。"
     else:
-        status["message"] = "API 增强未启用，当前使用本地转换。"
+        status["message"] = "API 配置不完整，请提供用户 API Key 或 api-secret.enc。"
 
     return status
 
 
 def build_configured_upstream_request(config, messages):
-    if not config.get("enabled"):
-        raise ValueError("api-config.json 未启用 API 增强。")
     if not config.get("apiKey"):
-        raise ValueError("api-config.json 缺少 apiKey。")
+        raise ValueError("缺少用户 API Key 或可用的 api-secret.enc。")
     if not config.get("model"):
         raise ValueError("api-config.json 缺少 model。")
 
@@ -122,6 +135,10 @@ class ToolHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
+        if is_protected_path(self.path):
+            self.send_error(404, "Not Found")
+            return
+
         if self.path.split("?", 1)[0] != "/api/config":
             super().do_GET()
             return
@@ -199,5 +216,5 @@ class ToolHandler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("127.0.0.1", PORT), ToolHandler)
-    print(f"AI Novel Script Tool: http://127.0.0.1:{PORT}/index.html?v=2026-06-06-config")
+    print(f"AI Novel Script Tool: http://127.0.0.1:{PORT}/index.html?v=2026-06-07-summary")
     server.serve_forever()

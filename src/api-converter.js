@@ -8,6 +8,14 @@ const GENERATOR_NAME = "AI Novel Script Tool API Mode";
 const UNKNOWN = "待确认";
 const ALLOWED_BEAT_TYPES = new Set(["action", "dialogue", "transition", "note"]);
 
+export class ConversionCancelledError extends Error {
+  constructor(partialResult = null) {
+    super("转换任务已取消");
+    this.name = "ConversionCancelledError";
+    this.partialResult = partialResult;
+  }
+}
+
 export function buildChatCompletionsUrl(baseUrl) {
   const trimmed = String(baseUrl || "").trim().replace(/\/+$/, "");
 
@@ -43,7 +51,8 @@ export function buildChatRequestOptions({
   model,
   messages,
   authMode = "bearer",
-  requestBody = {}
+  requestBody = {},
+  signal
 }) {
   const headers = {
     "Content-Type": "application/json"
@@ -62,11 +71,17 @@ export function buildChatRequestOptions({
     ...requestBody
   };
 
-  return {
+  const options = {
     method: "POST",
     headers,
     body: JSON.stringify(body)
   };
+
+  if (signal) {
+    options.signal = signal;
+  }
+
+  return options;
 }
 
 export async function requestChapterScript({
@@ -79,6 +94,7 @@ export async function requestChapterScript({
   useConfiguredProxy = false,
   chapter,
   schemaVersion = "1.0",
+  signal,
   fetchImpl = globalThis.fetch
 }) {
   if (typeof fetchImpl !== "function") {
@@ -90,7 +106,7 @@ export async function requestChapterScript({
   if (useConfiguredProxy) {
     const response = await fetchImpl(
       "/api/chat/completions",
-      buildConfiguredProxyRequestOptions(messages)
+      buildConfiguredProxyRequestOptions(messages, signal)
     );
     const payload = await response.json().catch(() => ({}));
 
@@ -125,7 +141,8 @@ export async function requestChapterScript({
     model,
     authMode,
     requestBody,
-    messages
+    messages,
+    signal
   });
   const response = await fetchImpl(
     useProxy ? "/api/chat/completions" : targetUrl,
@@ -164,33 +181,60 @@ export async function convertNovelWithApi(text, options = {}) {
     const chapter = apiChapters[index];
 
     options.onProgress?.({
-      current: index + 1,
+      phase: "start",
+      current: index,
       total: apiChapters.length,
+      chapterNumber: index + 1,
       title: chapter.title
     });
 
-    const apiChapter = await requestChapterScript({
-      apiKey: options.apiKey,
-      baseUrl: options.baseUrl,
-      model: options.model,
-      authMode: options.authMode,
-      requestBody: options.requestBody,
-      useProxy: options.useProxy,
-      useConfiguredProxy: options.useConfiguredProxy,
-      chapter,
-      fetchImpl: options.fetchImpl
-    });
+    try {
+      throwIfAborted(options.signal);
+      const apiChapter = await requestChapterScript({
+        apiKey: options.apiKey,
+        baseUrl: options.baseUrl,
+        model: options.model,
+        authMode: options.authMode,
+        requestBody: options.requestBody,
+        useProxy: options.useProxy,
+        useConfiguredProxy: options.useConfiguredProxy,
+        chapter,
+        signal: options.signal,
+        fetchImpl: options.fetchImpl
+      });
 
-    const normalized = normalizeApiChapter(apiChapter, chapter, index + 1, {
-      sceneCounter,
-      beatCounter
-    });
+      const normalized = normalizeApiChapter(apiChapter, chapter, index + 1, {
+        sceneCounter,
+        beatCounter
+      });
 
-    sceneCounter = normalized.nextSceneCounter;
-    beatCounter = normalized.nextBeatCounter;
-    normalizedEntries.push(normalized);
+      sceneCounter = normalized.nextSceneCounter;
+      beatCounter = normalized.nextBeatCounter;
+      normalizedEntries.push(normalized);
+      options.onProgress?.({
+        phase: "complete",
+        current: index + 1,
+        total: apiChapters.length,
+        chapterNumber: index + 1,
+        title: chapter.title
+      });
+    } catch (error) {
+      if (!isCancellation(error, options.signal)) {
+        throw error;
+      }
+
+      const partialResult =
+        normalizedEntries.length > 0
+          ? buildApiResult(chapters, apiChapters, normalizedEntries, options, "cancelled")
+          : null;
+      throw new ConversionCancelledError(partialResult);
+    }
   }
 
+  return buildApiResult(chapters, apiChapters, normalizedEntries, options, "completed");
+}
+
+function buildApiResult(chapters, apiChapters, normalizedEntries, options, status) {
   const normalizedChapters = normalizedEntries.map((entry) => entry.chapter);
   const characters = collectCharacters(normalizedEntries);
   const project = {
@@ -206,7 +250,9 @@ export async function convertNovelWithApi(text, options = {}) {
       generator: GENERATOR_NAME,
       source_chapter_count: chapters.length,
       api_model: options.model?.trim() || UNKNOWN,
-      api_processed_chapter_count: normalizedChapters.length
+      api_processed_chapter_count: normalizedChapters.length,
+      api_planned_chapter_count: apiChapters.length,
+      conversion_status: status
     },
     characters,
     chapters: normalizedChapters
@@ -218,6 +264,16 @@ export async function convertNovelWithApi(text, options = {}) {
     warnings,
     yaml: serializeYaml(project)
   };
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
+
+function isCancellation(error, signal) {
+  return Boolean(signal?.aborted || error?.name === "AbortError");
 }
 
 function limitChapters(chapters, maxChapters) {
@@ -237,7 +293,7 @@ function normalizePositiveInteger(value) {
 }
 
 function buildProxyRequestOptions(targetUrl, requestOptions) {
-  return {
+  const options = {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -250,16 +306,28 @@ function buildProxyRequestOptions(targetUrl, requestOptions) {
       }
     })
   };
+
+  if (requestOptions.signal) {
+    options.signal = requestOptions.signal;
+  }
+
+  return options;
 }
 
-function buildConfiguredProxyRequestOptions(messages) {
-  return {
+function buildConfiguredProxyRequestOptions(messages, signal) {
+  const options = {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({ messages })
   };
+
+  if (signal) {
+    options.signal = signal;
+  }
+
+  return options;
 }
 
 function buildChapterMessages(chapter, schemaVersion) {

@@ -3,32 +3,75 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#e8edf5">
     <title>AI 小说转剧本工具</title>
-    <link rel="stylesheet" href="./styles.css?v=2026-06-06-config">
+    <link rel="stylesheet" href="./styles.css?v=2026-06-07-summary">
   </head>
   <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div id="pointerGlow" class="pointer-glow" aria-hidden="true"></div>
+
     <main class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">YAML Screenplay Workspace</p>
-          <h1>AI 小说转剧本工具</h1>
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow">Story to Screenplay Studio</p>
+            <h1>AI 小说转剧本工具</h1>
+            <p class="hero-copy">将长篇故事拆解为可编辑、可校验的 YAML 剧本结构</p>
+          </div>
         </div>
         <div class="topbar-actions">
-          <a class="ghost-link" href="./docs/YAML_SCHEMA.md" download>Schema 文档</a>
-          <button id="loadSampleButton" type="button" class="secondary-button">示例文本</button>
+          <a class="soft-button ghost-link" href="./docs/YAML_SCHEMA.md" download>Schema 文档</a>
+          <button id="loadSampleButton" type="button" class="soft-button">载入示例</button>
         </div>
       </header>
 
+      <section id="progressCard" class="progress-card tilt-card" aria-live="polite">
+        <div class="progress-visual" aria-hidden="true">
+          <div id="waitingIndicator" class="waiting-indicator">
+            <span class="orbit orbit-one"></span>
+            <span class="orbit orbit-two"></span>
+            <span class="orbit-core"></span>
+          </div>
+        </div>
+        <div class="progress-content">
+          <div class="progress-heading">
+            <div>
+              <p class="section-kicker">Conversion status</p>
+              <h2 id="progressDetail">准备开始创作</h2>
+              <p id="progressChapter">导入小说文本后，即可生成结构化剧本</p>
+            </div>
+            <strong id="progressPercent">0%</strong>
+          </div>
+          <div
+            class="progress-track"
+            role="progressbar"
+            aria-label="转换进度"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <span id="progressBar"></span>
+          </div>
+        </div>
+        <button id="cancelButton" type="button" class="cancel-button" hidden>取消任务</button>
+      </section>
+
       <section class="workspace" aria-label="小说转剧本工作区">
-        <form class="panel input-panel">
+        <form class="panel input-panel tilt-card">
           <div class="panel-heading">
             <div>
+              <p class="section-kicker">Source</p>
               <h2>小说文本</h2>
-              <p>三章以上正文</p>
+              <p>建议导入三章以上正文</p>
             </div>
-            <label class="file-button">
+            <label class="soft-button file-button">
               <input id="fileInput" type="file" accept=".txt,.md,text/plain,text/markdown">
-              导入
+              导入文件
             </label>
           </div>
 
@@ -36,63 +79,78 @@
           <input id="titleInput" class="title-input" type="text" placeholder="导入后自动填入，或手动输入">
 
           <section class="api-status" aria-label="API 配置状态">
-            <strong id="apiStatusLabel">正在读取 API 配置</strong>
-            <span id="apiStatusDetail">配置文件：api-config.json</span>
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+              <strong id="apiStatusLabel">正在读取 API 配置</strong>
+              <span id="apiStatusDetail">配置文件：api-config.json</span>
+            </div>
           </section>
 
-          <label class="field-label" for="novelInput">正文</label>
-          <textarea id="novelInput" class="novel-input" spellcheck="false"></textarea>
+          <label class="field-label" for="novelInput">小说正文</label>
+          <textarea id="novelInput" class="novel-input" spellcheck="false" placeholder="粘贴小说正文，或使用右上角按钮导入文本文件..."></textarea>
 
           <div class="control-row">
-            <button id="convertButton" type="submit" class="primary-button">生成 YAML</button>
-            <button id="clearButton" type="button" class="secondary-button">清空</button>
+            <button id="convertButton" type="submit" class="primary-button">开始生成剧本</button>
+            <button id="clearButton" type="button" class="soft-button">清空内容</button>
           </div>
         </form>
 
-        <section class="panel output-panel" aria-label="YAML 输出">
+        <section class="panel output-panel tilt-card" aria-label="YAML 输出">
           <div class="panel-heading">
             <div>
+              <p class="section-kicker">Screenplay</p>
               <h2>结构化剧本</h2>
               <p id="statusText">等待生成</p>
             </div>
             <div class="output-actions">
-              <button id="copyButton" type="button" class="secondary-button">复制</button>
-              <button id="downloadButton" type="button" class="secondary-button">下载</button>
+              <button id="copyButton" type="button" class="soft-button">复制</button>
+              <button id="downloadButton" type="button" class="soft-button">下载 YAML</button>
             </div>
           </div>
 
-          <textarea id="yamlOutput" class="yaml-output" spellcheck="false" readonly></textarea>
+          <textarea id="yamlOutput" class="yaml-output" spellcheck="false" readonly placeholder="生成的 YAML 剧本将在这里显示..."></textarea>
         </section>
       </section>
 
       <section class="inspector" aria-label="剧本检查器">
-        <article class="stat-panel">
+        <article class="stat-panel tilt-card">
           <span>章节</span>
           <strong id="chapterCount">0</strong>
         </article>
-        <article class="stat-panel">
+        <article class="stat-panel tilt-card">
           <span>场景</span>
           <strong id="sceneCount">0</strong>
         </article>
-        <article class="stat-panel">
+        <article class="stat-panel tilt-card">
           <span>角色</span>
           <strong id="characterCount">0</strong>
         </article>
-        <article class="stat-panel">
+        <article class="stat-panel tilt-card">
           <span>Beat</span>
           <strong id="beatCount">0</strong>
         </article>
-        <article class="warnings-panel">
-          <h2>校验</h2>
+        <article class="warnings-panel tilt-card">
+          <div class="panel-heading compact">
+            <div>
+              <p class="section-kicker">Review</p>
+              <h2>结构校验</h2>
+            </div>
+          </div>
           <ul id="warningList"></ul>
         </article>
-        <article class="map-panel">
-          <h2>结构图</h2>
-          <canvas id="structureCanvas" width="680" height="150" aria-label="章节和场景结构图"></canvas>
+        <article class="map-panel tilt-card">
+          <div class="panel-heading compact">
+            <div>
+              <p class="section-kicker">Overview</p>
+              <h2>章节摘要</h2>
+            </div>
+            <button id="toggleChaptersButton" type="button" class="soft-button chapter-toggle" hidden>展开全部</button>
+          </div>
+          <div id="chapterSummaryList" class="chapter-summary-list" aria-live="polite"></div>
         </article>
       </section>
     </main>
 
-    <script type="module" src="./src/app.js?v=2026-06-06-config"></script>
+    <script type="module" src="./src/app.js?v=2026-06-07-summary"></script>
   </body>
 </html>
